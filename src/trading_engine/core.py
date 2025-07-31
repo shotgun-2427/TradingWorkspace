@@ -1,20 +1,20 @@
 import datetime
-import time
 from typing import List, Optional, Union, Dict, Sequence
 
 import polars as pl
 from hawk_backtester import HawkBacktester
 from polars import LazyFrame, DataFrame
 
-from constants import ProcessingMode
-from model_state.registry import FEATURES
-from models.registry import MODELS
-from utils import calculate_calendar_lookback, parse_backtest_result
+from common.constants import ProcessingMode
+from src.trading_engine.model_state import FEATURES
+from src.trading_engine.models import MODELS
+from src.trading_engine.optimizers import OPTIMIZERS
+from trading_engine.utils import calculate_calendar_lookback
 
 pl.enable_string_cache()
 
 # ---------------------------
-# Global shared model state
+# Global shared model state & prices
 # ---------------------------
 MODEL_STATE: Optional[pl.DataFrame] = None
 PRICES: Optional[pl.DataFrame] = None
@@ -274,8 +274,6 @@ def orchestrate_portfolio_backtests(
     All post-processing (padding, float coercion, clamping, L1 budget, price alignment)
     happens here so optimizers stay minimal.
     """
-    from optimizers.registry import OPTIMIZERS
-
     results: Dict[str, DataFrame] = {}
     for name in optimizers:
         if name not in OPTIMIZERS:
@@ -321,71 +319,3 @@ def orchestrate_portfolio_simulations(
         results[name] = backtester.run(prices, weights)
 
     return results
-
-
-if __name__ == "__main__":
-    # ==== Config Stuff ====
-    universe = [
-        "SPY-US", "SLV-US", "GLD-US", "TLT-US", "USO-US", "UNG-US",
-        "IXJ-US", "KXI-US", "JXI-US", "IXG-US", "IXN-US", "RXI-US",
-        "MXI-US", "EXI-US", "IXC-US", "IEI-US", "SHY-US", "BIL-US",
-        "JPXN-US", "INDA-US", "MCHI-US", "EZU-US", "IBIT-US", "ETHA-US", "VIXY-US"
-    ]
-
-    model_state_start_date = datetime.date(2000, 1, 1)
-    model_state_end_date = datetime.date(2025, 10, 1)
-    model_state_features = ["close_momentum_5", "close_momentum_10", "close_momentum_20", "close_rsi_14"]
-
-    models = ["RXI_TLT_pml_10", "GLD_USO_nml_10", "IXJ_USO_pml_10", "TLT_IXC_nml_10", "IXJ_KXI_pml_10"]
-
-    optimizers = ["equal_weight", "min_avg_drawdown"]
-    # ======================
-
-    t0 = time.perf_counter()
-    raw_lf = read_data()
-    t1 = time.perf_counter()
-
-    state_df = create_model_state(
-        lf=raw_lf,
-        features=model_state_features,
-        start_date=model_state_start_date,
-        end_date=model_state_end_date,
-        universe=universe,
-    )
-    t2 = time.perf_counter()
-
-    model_insights = orchestrate_model_backtests(models, universe)
-    t3 = time.perf_counter()
-
-    backtest_results = orchestrate_model_simulations(
-        model_insights=model_insights,
-        initial_value=1_000_000.0,
-    )
-    t4 = time.perf_counter()
-
-    portfolio_insights = orchestrate_portfolio_backtests(
-        optimizers=optimizers,
-        model_insights=model_insights,
-        backtest_results=backtest_results,
-        universe=universe,
-    )
-    t5 = time.perf_counter()
-
-    portfolio_results = orchestrate_portfolio_simulations(
-        portfolio_insights=portfolio_insights,
-        initial_value=1_000_000.0,
-    )
-    t6 = time.perf_counter()
-
-    # ==== Output Results ====
-    print(f"Data read (lazy) in {(t1 - t0) * 1000:.0f}ms")
-    print(f"Model state creation in {(t2 - t1) * 1000:.0f}ms")
-    print(f"Model backtests in {(t3 - t2) * 1000:.0f}ms")
-    print(f"Model simulations in {(t4 - t3) * 1000:.0f}ms")
-    print(f"Portfolio backtests in {(t5 - t4) * 1000:.0f}ms")
-    print(f"Portfolio simulations in {(t6 - t5) * 1000:.0f}ms")
-    print(f"Total time: {(t6 - t0) * 1000:.0f}ms")
-
-    for name, result in portfolio_results.items():
-        print("====", name, "====")
-        print(parse_backtest_result(result))

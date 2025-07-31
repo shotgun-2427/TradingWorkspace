@@ -1,13 +1,9 @@
-import math
+import json
 from typing import Dict
 
 import polars as pl
-import json
 
-
-def calculate_calendar_lookback(lookback_days: int, cushion_days: int = 2) -> int:
-    # 5 trading days ≈ 7 calendar days; add a small cushion for holidays/halts
-    return int(math.ceil(lookback_days * 7 / 5)) + cushion_days
+from common.model import Config
 
 
 def parse_backtest_result(backtest_result: Dict[str, pl.DataFrame]) -> str:
@@ -34,3 +30,15 @@ def parse_backtest_result(backtest_result: Dict[str, pl.DataFrame]) -> str:
 
     # If you truly need a string back:
     return json.dumps(metrics, default=float)
+
+
+def read_config_yaml(config_path: str) -> Config:
+    """
+    Read a YAML configuration file and return its contents as a dictionary.
+    """
+    import yaml
+
+    with open(config_path, 'r') as file:
+        config = yaml.safe_load(file)
+
+    return Config(**config)

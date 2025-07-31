@@ -1,5 +1,5 @@
-from optimizers.catalogue.equal_weight import EqualWeightOptimizer
-from optimizers.catalogue.min_avg_drawdown import MinAvgDrawdownOptimizer
+from trading_engine.optimizers.catalogue.equal_weight import EqualWeightOptimizer
+from trading_engine.optimizers.catalogue.min_avg_drawdown import MinAvgDrawdownOptimizer
 
 OPTIMIZERS = {
     "equal_weight": {

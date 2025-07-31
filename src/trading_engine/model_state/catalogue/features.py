@@ -49,3 +49,34 @@ def rsi(source_col: str, dest_col: str, window: int) -> Callable[[DataFrame], Da
         return df.drop(["delta", "gain", "loss", "avg_gain", "avg_loss"])
 
     return transform
+
+
+def natr(
+        high_col: str,
+        low_col: str,
+        close_col: str,
+        dest_col: str,
+        period: int,
+) -> Callable[[LazyFrame], LazyFrame]:
+    """
+    Wilder-style NATR using EWM(α=1/period) per ticker (lazy).
+    Adds `dest_col` to the frame. Assumes rows are sorted by ['ticker','date'].
+
+    NATR = 100 * EWM(TR, alpha=1/period) / close
+    TR   = max( high-low, |high - close.shift(1)|, |low - close.shift(1)| )
+    """
+    alpha = 1.0 / float(period)
+
+    def transform(lf: LazyFrame) -> LazyFrame:
+        tr = pl.max_horizontal([
+            pl.col(high_col) - pl.col(low_col),
+            (pl.col(high_col) - pl.col(close_col).shift(1)).abs(),
+            (pl.col(low_col) - pl.col(close_col).shift(1)).abs(),
+        ])
+
+        atr = tr.ewm_mean(alpha=alpha).over("ticker")
+        natr = ((atr / pl.col(close_col)) * 100.0).alias(dest_col)
+
+        return lf.with_columns(natr)
+
+    return transform
