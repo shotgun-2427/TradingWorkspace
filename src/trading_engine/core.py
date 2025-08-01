@@ -6,9 +6,9 @@ from hawk_backtester import HawkBacktester
 from polars import LazyFrame, DataFrame
 
 from common.constants import ProcessingMode
-from src.trading_engine.model_state import FEATURES
-from src.trading_engine.models import MODELS
-from src.trading_engine.optimizers import OPTIMIZERS
+from trading_engine.model_state import FEATURES
+from trading_engine.models import MODELS
+from trading_engine.optimizers import OPTIMIZERS
 from trading_engine.utils import calculate_calendar_lookback
 
 pl.enable_string_cache()
