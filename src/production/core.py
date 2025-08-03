@@ -1,0 +1,183 @@
+import math
+from typing import Iterable
+from typing import Optional, Dict, Any
+
+import polars as pl
+from polars import DataFrame
+
+from common.IBKR import IBKR
+
+
+def construct_goal_positions(
+        ibkr: IBKR,
+        insights: DataFrame,
+        prices: DataFrame,
+        universe: Optional[Iterable[str]] = None,  # optional filter
+) -> DataFrame:
+    """
+    Build per-ticker targets using latest insight weights and latest prices.
+
+    Inputs:
+      - insights: wide table, first column 'date' (optional), remaining columns are tickers with weights ([-1,1]).
+      - prices:   wide table, first column 'date' (optional), remaining columns are tickers with last price (>0).
+      - universe: optional iterable of tickers to include (accepts full 'AAPL-US' or canonical 'AAPL').
+
+    Output (Polars DataFrame):
+      ["ticker","weight","price","target_value","target_shares"]
+        - target_value = weight * NAV
+        - target_shares = int(target_value / price)  (truncates toward zero; negative for shorts)
+    """
+    if insights.is_empty() or prices.is_empty():
+        return pl.DataFrame(schema={
+            "ticker": pl.Utf8, "weight": pl.Float64, "price": pl.Float64,
+            "target_value": pl.Float64, "target_shares": pl.Int64
+        })
+
+    def _latest_row(df: DataFrame) -> Dict[str, Any]:
+        if "date" in df.columns:
+            df = df.sort("date")
+        return df.tail(1).to_dicts()[0]
+
+    def _num(x: Any) -> bool:
+        return isinstance(x, (int, float)) and not (isinstance(x, float) and math.isnan(x))
+
+    def _canon(sym: str) -> str:
+        return sym.split("-")[0]
+
+    latest_w = _latest_row(insights)
+    latest_p = _latest_row(prices)
+
+    weights = {k: float(v) for k, v in latest_w.items() if k != "date" and _num(v)}
+    px = {k: float(v) for k, v in latest_p.items() if k != "date" and _num(v) and v > 0.0}
+
+    tickers = sorted(set(weights) & set(px))
+
+    if universe:
+        u_full = set(universe)
+        u_canon = {_canon(u) for u in universe}
+        tickers = [t for t in tickers if t in u_full or _canon(t) in u_canon]
+
+    nav = float(ibkr.get_nav())
+
+    rows = []
+    for t in tickers:
+        w = weights[t]
+        p = px[t]
+        target_value = w * nav
+        target_shares = int(target_value / p)  # keeps sign for shorts
+        rows.append(
+            {"ticker": t, "weight": w, "price": p,
+             "target_value": target_value, "target_shares": target_shares}
+        )
+
+    return pl.DataFrame(rows, schema={
+        "ticker": pl.Utf8,
+        "weight": pl.Float64,
+        "price": pl.Float64,
+        "target_value": pl.Float64,
+        "target_shares": pl.Int64,
+    })
+
+
+def calculate_rebalance_orders(
+        ibkr: IBKR,
+        targets: DataFrame,  # output of construct_goal_positions()
+        universe: Optional[Iterable[str]] = None,
+        close_out_outside_universe: bool = True,  # if True, flatten any positions not in universe/targets
+) -> DataFrame:
+    """
+    Compare current holdings vs target_shares and produce a rebalance plan (no order objects).
+
+    Returns a Polars DataFrame:
+      ["ticker","current_shares","target_shares","delta_shares","action","order_quantity"]
+
+    Notes:
+      - Negative shares are shorts and are preserved.
+      - If `universe` is provided and `close_out_outside_universe=True`, any held name
+        outside the universe/targets is targeted to 0 (i.e., closed).
+    """
+    required_cols = {"ticker", "target_shares"}
+    missing = required_cols - set(targets.columns)
+    if missing:
+        raise ValueError(f"'targets' is missing columns: {sorted(missing)}")
+
+    def _canon(sym: str) -> str:
+        return sym.split("-")[0]
+
+    # Map canonical -> full ticker and target shares
+    target_rows = targets.select(["ticker", "target_shares"]).to_dicts()
+    canonical_to_full: Dict[str, str] = {}
+    target_shares_map: Dict[str, int] = {}
+    for r in target_rows:
+        full = r["ticker"]
+        canon = _canon(full)
+        canonical_to_full[canon] = full
+        target_shares_map[canon] = int(r["target_shares"])
+
+    # Current positions from IB
+    current_positions_map: Dict[str, int] = {}
+    for sym, pos in ibkr.account.positions.items():
+        current_positions_map[sym] = int(pos.position)
+
+    # Build canonical universe (if provided)
+    if universe:
+        u_canon = {_canon(u) for u in universe}
+    else:
+        u_canon = None
+
+    # Determine the set to evaluate
+    base_set = set(target_shares_map.keys())
+    if u_canon:
+        base_set |= u_canon  # ensure all universe names are considered (even if target 0)
+    all_canonicals = base_set | set(current_positions_map.keys())
+
+    # If we are NOT closing outside universe, drop anything not in (targets ∪ universe)
+    if u_canon and not close_out_outside_universe:
+        all_canonicals = {c for c in all_canonicals if (c in target_shares_map or c in u_canon)}
+
+    rows = []
+    for canon in sorted(all_canonicals):
+        current = current_positions_map.get(canon, 0)
+        target = target_shares_map.get(canon, 0)
+
+        # If outside universe and not explicitly targeted, optionally close out to 0
+        if u_canon and (canon not in u_canon) and (canon not in target_shares_map):
+            target = 0 if close_out_outside_universe else current
+
+        delta = target - current  # >0 BUY, <0 SELL (short more)
+
+        full_ticker = canonical_to_full.get(canon, canon)
+        rows.append(
+            {
+                "ticker": full_ticker,
+                "current_shares": current,
+                "target_shares": target,
+                "delta_shares": delta,
+                "action": ("BUY" if delta > 0 else ("SELL" if delta < 0 else "HOLD")),
+                "order_quantity": abs(delta),
+            }
+        )
+
+    df = pl.DataFrame(
+        rows,
+        schema={
+            "ticker": pl.Utf8,
+            "current_shares": pl.Int64,
+            "target_shares": pl.Int64,
+            "delta_shares": pl.Int64,
+            "action": pl.Utf8,
+            "order_quantity": pl.Int64,
+        },
+    ).filter(pl.col("delta_shares") != 0)
+
+    return df
+
+
+def generate_trade_report(
+        df: DataFrame,
+        as_of: str,
+) -> str:
+    return f"""
+    Hawk Daily Trade Report: {as_of}
+    {str(df)}
+    """

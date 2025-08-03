@@ -8,6 +8,7 @@ readme = "README.md"
 [tool.poetry.dependencies]
 python = "^3.11"
 hawk-backtester = "^0.3.5"
+ib-async = "^2.0.1"
 
 [tool.poetry.group.nohawk.dependencies]
 polars = "^1.31.0"

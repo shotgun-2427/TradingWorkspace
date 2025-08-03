@@ -1,5 +1,5 @@
 start_date: 2004-12-31
-end_date: 2025-12-31
+end_date: 2026-12-31
 universe: [
   SPY-US, SLV-US, GLD-US, TLT-US, USO-US, UNG-US, IXJ-US,
   KXI-US, JXI-US, IXG-US, IXN-US, RXI-US, MXI-US, EXI-US,
@@ -15,7 +15,10 @@ model_state_features: [
 models: [
   RXI_TLT_pml_10, GLD_USO_nml_10, IXJ_USO_pml_10,
   TLT_IXC_nml_10, IXJ_KXI_pml_10, etf_mr_jxi_60_0.001,
-  etf_mr_jxi_240_0.001, etf_mr_jxi_240_0.005, etf_mr_jxi_240_0.05,
-  etf_mr_jxi_240_0.01
+  natr_7_14
 ]
 optimizers: [ equal_weight ]
+ib_gateway:
+  host: 127.0.0.1
+  port: 4002 # 4001 for live, 4002 for paper
+  client_id: 1

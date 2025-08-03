@@ -16,9 +16,14 @@ from trading_engine.core import (
 logger = setup_logger(__name__)
 
 
+class NotATradingDayError(Exception):
+    pass
+
+
 async def main():
     logger.info("Starting production pipeline.")
-    # ==== setup
+    # ======== setup
+    # ==== initialization
     current_date = time.strftime("%Y-%m-%d")
     writer = AsyncGCSCSVWriter(
         bucket_name="wsb-hc-qasap-bucket-1",
@@ -34,10 +39,20 @@ async def main():
     logger.info(f"Configuration loaded: {c}")
     t0 = time.perf_counter()
 
+    # ======== trading engine
     # ==== read data
     raw_lf = read_data()
     logger.info(f"Data read complete")
     t1 = time.perf_counter()
+
+    # ==== validate data (check if the latest date in the data is "current" date, otherwise it's not a trading day)
+    latest_date = raw_lf.select("date").sort("date", descending=True).first().collect().item()
+
+    if latest_date.strftime('%Y-%m-%d') != current_date:
+        logger.info(
+            f"Latest date in data ({latest_date}) does not match current date ({current_date}). Therefore, it is not a trading day. Gracefully exiting."
+        )
+        raise NotATradingDayError()
 
     # ==== create model state
     state_df, price_df = create_model_state(
@@ -60,6 +75,7 @@ async def main():
         model_insights=model_insights,
         initial_value=1_000_000.0,
     )
+
     logger.info(f"Model simulations orchestrated for models: {list(model_backtests.keys())}")
     t4 = time.perf_counter()
 
@@ -78,11 +94,47 @@ async def main():
         portfolio_insights=portfolio_insights,
         initial_value=1_000_000.0,
     )
+
     logger.info(f"Portfolio simulations orchestrated for optimizers: {list(portfolio_backtests.keys())}")
     t6 = time.perf_counter()
 
-    logger.info("Production pipeline completed successfully.")
+    # # ======== execution engine
+    # # ==== calculate goal positions
+    # portfolio_name, portfolio_insight = portfolio_insights.popitem()  # only one portfolio is configured in production
+    # ibkr = await IBKR.create(c.ib_gateway.host, c.ib_gateway.port, c.ib_gateway.client_id)
+    # goal_positions = construct_goal_positions(
+    #     ibkr=ibkr,
+    #     insights=portfolio_insight,
+    #     prices=price_df,
+    #     universe=c.universe,
+    # )
+    # logger.info(f"Goal positions calculated for portfolio: {portfolio_name}")
+    t7 = time.perf_counter()
+    #
+    # # ==== calculate rebalance orders
+    # rebalance_df = calculate_rebalance_orders(
+    #     ibkr=ibkr,
+    #     targets=goal_positions,
+    #     universe=c.universe,
+    #     close_out_outside_universe=True,
+    # )
+    # logger.info(f"Rebalance orders calculated for portfolio: {portfolio_name}")
+    t8 = time.perf_counter()
+    #
+    # # ==== generate trade report
+    # rebalance_with_px = (
+    #     rebalance_df.join(goal_positions.select(["ticker", "price"]), on="ticker", how="left")
+    # )
+    # report_txt = generate_trade_report(rebalance_with_px, as_of=current_date)
+    #
+    # post_to_teams(
+    #     webhook_url=c.notifications["teams_webhook"],
+    #     message=report_txt
+    # )
+    #
+    # logger.info("Production pipeline completed successfully.")
 
+    # ======== cleanup
     # ==== write results to GCS
     c.dump_to_gcs(f"gs://{writer.bucket_name}/{writer.prefix}/config.json")
 
@@ -102,10 +154,13 @@ async def main():
         for df_name, df in results.items():
             await writer.save(df, f"portfolio_backtests_{name}_{df_name}.csv")
 
+    # await writer.save(goal_positions, "goal_positions.csv")
+    # await writer.save(rebalance_df, "rebalance_orders.csv")
+
     await writer.flush()
     await writer.close()
     logger.info("Results written to GCS")
-    t7 = time.perf_counter()
+    t9 = time.perf_counter()
 
     # ==== output
     logger.debug(f"Data read (lazy) in {(t1 - t0) * 1000:.0f}ms")
@@ -114,8 +169,10 @@ async def main():
     logger.debug(f"Model simulations in {(t4 - t3) * 1000:.0f}ms")
     logger.debug(f"Portfolio backtests in {(t5 - t4) * 1000:.0f}ms")
     logger.debug(f"Portfolio simulations in {(t6 - t5) * 1000:.0f}ms")
-    logger.debug(f"Total time: {(t6 - t0) * 1000:.0f}ms")
-    logger.debug(f"Total time with GCS writes: {(t7 - t0) * 1000:.0f}ms")
+    logger.debug(f"Goal positions calculation in {(t7 - t6) * 1000:.0f}ms")
+    logger.debug(f"Rebalance orders calculation in {(t8 - t7) * 1000:.0f}ms")
+    logger.debug(f"Total time: {(t9 - t0) * 1000:.0f}ms")
+    logger.debug(f"Total time with GCS writes: {(t9 - t0) * 1000:.0f}ms")
 
     span.set_attribute('pipeline.read_duration', t1 - t0)
     span.set_attribute('pipeline.model_state_duration', t2 - t1)
@@ -123,8 +180,10 @@ async def main():
     span.set_attribute('pipeline.model_simulations_duration', t4 - t3)
     span.set_attribute('pipeline.portfolio_backtests_duration', t5 - t4)
     span.set_attribute('pipeline.portfolio_simulations_duration', t6 - t5)
-    span.set_attribute('pipeline.gcs_write_duration', t7 - t6)
-    span.set_attribute('pipeline.total_duration', t7 - t0)
+    span.set_attribute('pipeline.goal_positions_duration', t7 - t6)
+    span.set_attribute('pipeline.rebalance_orders_duration', t8 - t7)
+    span.set_attribute('pipeline.gcs_write_duration', t9 - t8)
+    span.set_attribute('pipeline.total_duration', t9 - t0)
 
 
 if __name__ == "__main__":
@@ -134,6 +193,10 @@ if __name__ == "__main__":
     with tracer.start_as_current_span("pipeline") as span:
         try:
             asyncio.run(main())
+        except NotATradingDayError:
+            logger.info("Not a trading day, exiting gracefully.")
+            span.set_status(trace.StatusCode.UNSET, "Not a trading day")
+            # We need to find a better way to skip trading days.
         except Exception as e:
             logger.error(f"Error running production pipeline: {e}")
             span.set_status(trace.StatusCode.ERROR, str(e))

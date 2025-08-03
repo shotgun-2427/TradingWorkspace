@@ -74,7 +74,6 @@ Implementation notes
 from __future__ import annotations
 
 import asyncio
-import dataclasses
 import datetime as _dt
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -82,8 +81,6 @@ from typing import Optional, Tuple, Union
 
 import polars as pl
 from google.cloud import storage
-
-from common.model import Config
 
 
 class AsyncGCSCSVWriter:
