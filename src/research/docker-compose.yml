@@ -1,0 +1,13 @@
+version: "3.9"
+services:
+  lab:
+    build:
+      context: ../..
+      dockerfile: src/research/Dockerfile
+    ports: ["8888:8888"]
+    working_dir: /work/src/research
+    environment:
+      - GOOGLE_APPLICATION_CREDENTIALS=/sa.json   # path *inside* container
+    volumes:
+      - ../..:/work                                # repo root
+      - ${GOOGLE_APPLICATION_CREDENTIALS}:/sa.json:ro   # host SA -> /sa.json

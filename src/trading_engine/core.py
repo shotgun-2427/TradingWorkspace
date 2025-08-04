@@ -52,17 +52,21 @@ def read_data() -> LazyFrame:
 
 
 def create_model_state(
-        lf: LazyFrame, features: list[str], start_date: datetime.date, end_date: datetime.date, universe: List[str]
+        lf: LazyFrame, features: list[str], start_date: datetime.date, end_date: datetime.date, universe: List[str],
+        catalogue=None
 ) -> tuple[DataFrame, DataFrame]:
     """
     Build model state with warmup lookback and eager feature support.
     Returns an eager DataFrame (to store in memory).
     """
+    if not catalogue:
+        catalogue = FEATURES
+
     lazy_fns, eager_fns = [], []
     for f in features:
-        if f not in FEATURES:
+        if f not in catalogue:
             continue
-        entry = FEATURES[f]
+        entry = catalogue[f]
         (lazy_fns if entry["mode"] == ProcessingMode.LAZY else eager_fns).append(entry["func"])
 
     # Filter to the date range + lookback buffer
@@ -162,20 +166,24 @@ def orchestrate_model_backtests(
         models: List[str],
         universe: List[str],
         clamp_bounds: tuple[float, float] = (-1.0, 1.0),
+        catalogue=None,
 ) -> Dict[str, pl.LazyFrame]:
     """
     Run selected models and return per-model LazyFrames padded to the full universe:
       { model_name: LazyFrame(["date"] + universe) }, weights in [-1, 1].
     No aggregation or L1 normalization here.
     """
+    if not catalogue:
+        catalogue = MODELS
+
     lo, hi = clamp_bounds
     results: Dict[str, pl.LazyFrame] = {}
 
     for name in models:
-        if name not in MODELS:
+        if name not in catalogue:
             raise KeyError(f"Unknown model: {name}")
 
-        spec = MODELS[name]
+        spec = catalogue[name]
         tickers: List[str] = spec["tickers"]  # input tickers needed by this model
         columns: List[str] = spec["columns"]
         runner = spec["function"]  # Callable[[LazyFrame], DataFrame|LazyFrame]
@@ -266,6 +274,7 @@ def orchestrate_portfolio_backtests(
         universe: List[str],
         clamp_bounds: tuple[float, float] = (-1.0, 1.0),
         l1_budget: float = 1.0,
+        catalogue=None,
 ) -> Dict[str, DataFrame]:
     """
     Run portfolio optimizers on the model insights and per-model backtests.
@@ -274,12 +283,15 @@ def orchestrate_portfolio_backtests(
     All post-processing (padding, float coercion, clamping, L1 budget, price alignment)
     happens here so optimizers stay minimal.
     """
+    if not catalogue:
+        catalogue = OPTIMIZERS
+
     results: Dict[str, DataFrame] = {}
     for name in optimizers:
-        if name not in OPTIMIZERS:
+        if name not in catalogue:
             raise KeyError(f"Unknown optimizer: {name}")
 
-        optimizer_fn = OPTIMIZERS[name]["function"]  # Callable[[Dict[str, LF], Dict], LF]
+        optimizer_fn = catalogue[name]["function"]  # Callable[[Dict[str, LF], Dict], LF]
         raw = optimizer_fn(model_insights, backtest_results)  # LazyFrame or DataFrame
 
         lf = _ensure_lazy(raw)
