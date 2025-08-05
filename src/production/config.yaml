@@ -20,7 +20,7 @@ models: [
 optimizers: [ equal_weight ]
 ib_gateway:
   host: 127.0.0.1
-  port: 4002 # 4001 for live, 4002 for paper
+  port: 4002
   client_id: 1
 notifications:
   msteams_webhook: "https://prod-82.westus.logic.azure.com:443/workflows/84ecc862f73c44d48669403ec1f79355/triggers/manual/paths/invoke?api-version=2016-06-01&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=fmRlFB67u4ifTp3PXN5HQs8LV5grrjpHDfgJghcdEvs"

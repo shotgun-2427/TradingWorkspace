@@ -1,5 +1,6 @@
 import dataclasses
 import datetime
+import os
 from dataclasses import dataclass
 
 
@@ -8,6 +9,12 @@ class IBGatewayConfig:
     host: str
     port: int
     client_id: int
+
+    def __post_init__(self):
+        if os.environ.get("IB_HOST"):
+            self.host = os.environ["IB_HOST"]
+        if os.environ.get("IB_PORT"):
+            self.port = int(os.environ["IB_PORT"])
 
 
 @dataclass

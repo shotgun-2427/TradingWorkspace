@@ -47,6 +47,6 @@ def read_config_yaml(config_path: str) -> Config:
 def post_to_teams(webhook_url: str, message: str):
     """ Post a message to Microsoft Teams using a webhook URL."""
     import pymsteams
-    myTeamsMessage = pymsteams.connectorcard(webhook_url)
-    myTeamsMessage.text(message)
-    myTeamsMessage.send()
+    card = pymsteams.connectorcard(webhook_url)
+    card.text(message)
+    assert card.send()

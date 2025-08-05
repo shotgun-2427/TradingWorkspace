@@ -24,7 +24,7 @@ jobs:
           echo "$HOME/.local/bin" >> $GITHUB_PATH
 
       - name: Install dependencies
-        run: poetry install --only=nohawk --no-interaction
+        run: poetry install --no-interaction
 
       - name: Run pytest with coverage threshold
         run: poetry run pytest --cov=src/trading_engine --cov-fail-under=0

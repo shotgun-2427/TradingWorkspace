@@ -134,6 +134,7 @@ async def main():
 
         logger.info("Production pipeline completed successfully.")
     except Exception as e:
+        t7 = t8 = time.perf_counter()  # set t7 and t8 to current time to avoid confusion
         logger.error(f"Error during IBKR pipeline execution: {e}")
     else:
         await writer.save(goal_positions, "goal_positions.csv")
@@ -165,9 +166,14 @@ async def main():
 
     # Post Goal Positions to Teams
     last_row_dict = portfolio_insight[-1].to_dict(as_series=False)
+
+    goal_position_list = [f"{k}: {round(v[0] * 100, 2)}%" for k, v in last_row_dict.items() if k != 'date']
+    goal_position_string = "<br>".join(goal_position_list)
+    message = f"<strong>Goal Positions ({current_date})</strong><br>{goal_position_string}"
+
     post_to_teams(
         webhook_url=c.notifications["msteams_webhook"],
-        message=f"Goal Positions ({current_date}):\n{last_row_dict}"
+        message=message
     )
 
     t9 = time.perf_counter()
