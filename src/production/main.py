@@ -4,13 +4,13 @@ import time
 from opentelemetry import trace
 from polars import DataFrame
 
-from common.async_polars_gcs import AsyncGCSCSVWriter
+from common.async_gcs_writer import AsyncGCSWriter
 from common.interactive_brokers import IBKR
 from common.logging import setup_logger
 from common.model import Config
 from common.otel import setup_otel, flush_otel, timed
-from common.utils import read_config_yaml
-from production.core import construct_goal_positions, construct_rebalance_orders
+from common.utils import read_config_yaml, post_to_teams
+from production.core import construct_goal_positions, construct_rebalance_orders, generate_trade_report
 from production.validation import validate_production_config
 from trading_engine.core import (
     read_data, create_model_state, orchestrate_model_backtests, orchestrate_model_simulations,
@@ -33,7 +33,7 @@ async def setup() -> tuple:
     logger.info(f"Configuration loaded: {config}")
 
     # GCS Writer
-    gcs_writer = AsyncGCSCSVWriter(
+    gcs_writer = AsyncGCSWriter(
         bucket_name="wsb-hc-qasap-bucket-1",
         prefix=f"hcf/production_audit/{current_date_str}",
     )
@@ -42,7 +42,7 @@ async def setup() -> tuple:
     return config, current_date_str, gcs_writer
 
 
-async def run_trading_engine(config: Config, writer: AsyncGCSCSVWriter, current_date: str):
+async def run_trading_engine(config: Config, writer: AsyncGCSWriter, current_date: str):
     with timed("pipeline.read_data_duration"):
         lf = read_data()
 
@@ -62,8 +62,8 @@ async def run_trading_engine(config: Config, writer: AsyncGCSCSVWriter, current_
             end_date=config.end_date,
             universe=config.universe,
         )
-    await writer.save(model_state, "model_state.csv")
-    await writer.save(prices, "prices.csv")
+    await writer.save_polars(model_state, "model_state.csv")
+    await writer.save_polars(prices, "prices.csv")
 
     # ==== orchestrate model backtests
     with timed("pipeline.model_backtests_duration"):
@@ -73,7 +73,7 @@ async def run_trading_engine(config: Config, writer: AsyncGCSCSVWriter, current_
             universe=config.universe
         )
     await asyncio.gather(*(
-        writer.save(df, f"model_insights_{name}.csv")
+        writer.save_polars(df, f"model_insights_{name}.csv")
         for name, df in model_insights.items()
     ))
 
@@ -85,7 +85,7 @@ async def run_trading_engine(config: Config, writer: AsyncGCSCSVWriter, current_
             initial_value=1_000_000.0,
         )
     await asyncio.gather(*(
-        writer.save(df, f"model_backtests_{model}_{kind}.csv")
+        writer.save_polars(df, f"model_backtests_{model}_{kind}.csv")
         for model, results in model_backtests.items()
         for kind, df in results.items()
     ))
@@ -99,7 +99,7 @@ async def run_trading_engine(config: Config, writer: AsyncGCSCSVWriter, current_
             universe=config.universe,
         )
     await asyncio.gather(*(
-        writer.save(df, f"portfolio_insights_{name}.csv")
+        writer.save_polars(df, f"portfolio_insights_{name}.csv")
         for name, df in portfolio_insights.items()
     ))
 
@@ -111,7 +111,7 @@ async def run_trading_engine(config: Config, writer: AsyncGCSCSVWriter, current_
             initial_value=1_000_000.0,
         )
     await asyncio.gather(*(
-        writer.save(df, f"portfolio_backtests_{pname}_{kind}.csv")
+        writer.save_polars(df, f"portfolio_backtests_{pname}_{kind}.csv")
         for pname, results in portfolio_backtests.items()
         for kind, df in results.items()
     ))
@@ -121,9 +121,10 @@ async def run_trading_engine(config: Config, writer: AsyncGCSCSVWriter, current_
 
 async def run_execution_engine(
         config: Config,
-        writer: AsyncGCSCSVWriter,
+        writer: AsyncGCSWriter,
         prices: DataFrame,
-        portfolio_insight: DataFrame
+        portfolio_insight: DataFrame,
+        current_date: str
 ):
     ib_client = await IBKR.create(
         hostname=config.ib_gateway.host,
@@ -140,7 +141,7 @@ async def run_execution_engine(
             universe=config.universe,
         )
 
-    await writer.save(goal_positions, "goal_positions.csv")
+    await writer.save_polars(goal_positions, "goal_positions.csv")
 
     with timed("pipeline.rebalance_orders_duration"):
         rebalance_df = construct_rebalance_orders(
@@ -150,14 +151,24 @@ async def run_execution_engine(
             close_out_outside_universe=True,
         )
 
-    await writer.save(rebalance_df, "rebalance_orders.csv")
+    await writer.save_polars(rebalance_df, "rebalance_orders.csv")
 
     logger.info("FINISHED EXECUTION")
 
-    # # ==== generate trade report
-    # rebalance_with_px = (
-    #     rebalance_df.join(goal_positions.select(["ticker", "price"]), on="ticker", how="left")
-    # )
+    # ==== generate trade report
+    rebalance_with_px = (
+        rebalance_df.join(goal_positions.select(["ticker", "price"]), on="ticker", how="left")
+    )
+
+    trade_report = generate_trade_report(
+        df=rebalance_with_px,
+        as_of=current_date,
+    )
+
+    await writer.save_text(trade_report, "trade_report.txt", content_type="text/html")
+    # construct location
+    trade_report_location = f"gs://{writer.bucket_name}/{writer.prefix}/trade_report.txt"
+    return trade_report_location
 
 
 async def main():
@@ -171,8 +182,9 @@ async def main():
     # ==== execution engine
     portfolio_name, portfolio_insight = portfolio_insights.popitem()
 
+    report_path = None
     try:
-        await run_execution_engine(c, writer, prices, portfolio_insight)
+        report_path = await run_execution_engine(c, writer, prices, portfolio_insight, current_date)
     except Exception as e:
         logger.error(f"Failed to run execution engine: {e}")
 
@@ -187,12 +199,16 @@ async def main():
     goal_position_list = [f"{k}: {round(v[0] * 100, 2)}%" for k, v in last_row_dict.items() if k != 'date']
     goal_position_string = "<br>".join(goal_position_list)
     message = f"<strong>Goal Positions ({current_date})</strong><br>{goal_position_string}"
+
+    if report_path:
+        message += f"<br><br>Execution Report: <a href='{report_path}'>View Report</a>"
+
     logger.info(message)
 
-    # post_to_teams(
-    #     webhook_url=c.notifications["msteams_webhook"],
-    #     message=message
-    # )
+    post_to_teams(
+        webhook_url=c.notifications["msteams_webhook"],
+        message=message
+    )
 
 
 if __name__ == "__main__":

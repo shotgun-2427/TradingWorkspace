@@ -178,6 +178,9 @@ def generate_trade_report(
         as_of: str,
 ) -> str:
     return f"""
+    {'=' * 40}
     Hawk Daily Trade Report: {as_of}
+    {'=' * 40}
     {str(df)}
+    {'=' * 40}
     """

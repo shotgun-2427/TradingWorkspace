@@ -6,9 +6,9 @@ import polars as pl
 from google.cloud import storage
 
 
-class AsyncGCSCSVWriter:
+class AsyncGCSWriter:
     """
-    Minimal async CSV uploader for Polars DataFrames / LazyFrames to GCS.
+    Minimal async uploader for various objects to GCS.
     - No queue, no worker thread mgmt.
     - Concurrency bounded by a semaphore.
     - Uses asyncio.to_thread() to offload blocking work.
@@ -43,7 +43,7 @@ class AsyncGCSCSVWriter:
     async def __aexit__(self, exc_type, exc, tb):
         await self.close()
 
-    async def save(
+    async def save_polars(
             self,
             frame: Union[pl.DataFrame, pl.LazyFrame],
             file_name: Optional[str] = None,
@@ -63,7 +63,7 @@ class AsyncGCSCSVWriter:
             async with self._sem:
                 try:
                     # Run the whole pipeline in one worker thread
-                    await asyncio.to_thread(self._sync_upload, name, f)
+                    await asyncio.to_thread(self._sync_polars, name, f)
                 except Exception as e:  # keep going; surface later in flush()
                     self._errors.append((name, e))
 
@@ -71,7 +71,7 @@ class AsyncGCSCSVWriter:
         self._tasks.add(t)
         t.add_done_callback(self._tasks.discard)
 
-    def _sync_upload(self, name: str, frame: Union[pl.DataFrame, pl.LazyFrame]) -> None:
+    def _sync_polars(self, name: str, frame: Union[pl.DataFrame, pl.LazyFrame]) -> None:
         # Collect if lazy (CPU-bound)
         if isinstance(frame, pl.LazyFrame):
             frame = frame.collect()
@@ -92,6 +92,50 @@ class AsyncGCSCSVWriter:
 
         # Upload
         blob.upload_from_string(csv_bytes, content_type="text/csv")
+
+    async def save_text(
+            self,
+            text: str,
+            file_name: Optional[str] = None,
+            *,
+            content_type: str = "text/plain",
+    ) -> None:
+        """
+        Schedule an upload of a plain text string to GCS. Returns when scheduled.
+        Call flush() or close() to wait for completion.
+        """
+        if self._closed:
+            raise RuntimeError("writer is closed")
+
+        if file_name is None:
+            ts = dt.datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")
+            file_name = f"text_{ts}.txt"
+
+        async def _task(name: str, txt: str) -> None:
+            async with self._sem:
+                try:
+                    await asyncio.to_thread(self._sync_upload_text, name, txt, content_type)
+                except Exception as e:
+                    self._errors.append((name, e))
+
+        t = asyncio.create_task(_task(file_name, text))
+        self._tasks.add(t)
+        t.add_done_callback(self._tasks.discard)
+
+    def _sync_upload_text(self, name: str, text: str, content_type: str = "text/plain") -> None:
+        data = text.encode("utf-8")
+        if self._gzip:
+            import gzip
+            data = gzip.compress(data)
+
+        blob_name = f"{self.prefix}/{name}" if self.prefix else name
+        blob = self._bucket.blob(blob_name)
+        if self._chunk_size:
+            blob.chunk_size = self._chunk_size
+        if self._gzip:
+            blob.content_encoding = "gzip"
+
+        blob.upload_from_string(data, content_type=content_type)
 
     async def flush(self) -> None:
         """Wait for all scheduled uploads to finish; raise on the first error."""
