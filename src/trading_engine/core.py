@@ -1,5 +1,5 @@
 import datetime
-from typing import List, Optional, Union, Dict, Sequence
+from typing import List, Union, Dict, Sequence
 
 import polars as pl
 from hawk_backtester import HawkBacktester
@@ -13,51 +13,26 @@ from trading_engine.utils import calculate_calendar_lookback
 
 pl.enable_string_cache()
 
-# ---------------------------
-# Global shared model state & prices
-# ---------------------------
-MODEL_STATE: Optional[pl.DataFrame] = None
-PRICES: Optional[pl.DataFrame] = None
-
-
-def set_model_state(df: pl.DataFrame) -> None:
-    """Replace the global model state atomically."""
-    global MODEL_STATE
-    MODEL_STATE = df.rechunk()  # compact buffers for faster slicing
-
-
-def get_model_state() -> pl.DataFrame:
-    assert MODEL_STATE is not None, "MODEL_STATE not built yet. Call create_model_state(...) first."
-    return MODEL_STATE
-
-
-def set_prices(df: pl.DataFrame) -> None:
-    """Replace the global prices atomically."""
-    global PRICES
-    PRICES = df.rechunk()  # compact buffers for faster slicing
-
-
-def get_prices() -> pl.DataFrame:
-    assert PRICES is not None, "PRICES not built yet. Call create_model_state_and_prices(...) first."
-    return PRICES
-
 
 def read_data() -> LazyFrame:
     """Read the raw data from the Parquet file in lazy mode."""
     BUCKET = "wsb-hc-qasap-bucket-1"
     PREFIX = "hcf/raw_data/factset_equities_ohlcv_snapshot"
     parquet_uri = f"gs://{BUCKET}/{PREFIX}/parquet/part-*.parquet"
-
     return pl.scan_parquet(parquet_uri)
 
 
 def create_model_state(
-        lf: LazyFrame, features: list[str], start_date: datetime.date, end_date: datetime.date, universe: List[str],
+        lf: LazyFrame,
+        features: list[str],
+        start_date: datetime.date,
+        end_date: datetime.date,
+        universe: List[str],
         catalogue=None
 ) -> tuple[DataFrame, DataFrame]:
     """
     Build model state with warmup lookback and eager feature support.
-    Returns an eager DataFrame (to store in memory).
+    Returns (model_state, prices) tuple.
     """
     if not catalogue:
         catalogue = FEATURES
@@ -83,34 +58,31 @@ def create_model_state(
 
     # Apply lazy feature functions
     for feature_fn in lazy_fns:
-        lf = feature_fn(lf)  # Callable[[LazyFrame], LazyFrame]
+        lf = feature_fn(lf)
 
     # Materialize once; streaming helps on large backfill
     out = lf.collect(engine="streaming")
 
-    # Apply eager feature functions (DataFrame -> DataFrame)
+    # Apply eager feature functions
     for feature_fn in eager_fns:
         out = feature_fn(out)
 
     # Trim warmup and finalize
-    out = (
+    model_state = (
         out.filter((pl.col("date") >= pl.lit(start_date)) & (pl.col("date") <= pl.lit(end_date)))
         .sort(["ticker", "date"])
         .rechunk()
     )
 
-    set_model_state(out)
-    prices = construct_prices(universe)
-    set_prices(prices)
+    prices = construct_prices(model_state, universe)
 
-    return out, prices
+    return model_state, prices
 
 
-def _build_model_lazy_input(tickers: List[str], columns: List[str]) -> pl.LazyFrame:
-    base = get_model_state().clone()
+def _build_model_lazy_input(model_state: DataFrame, tickers: List[str], columns: List[str]) -> pl.LazyFrame:
     cols = ["date", "ticker", *columns]
     return (
-        base.lazy()
+        model_state.lazy()
         .filter(pl.col("ticker").is_in(tickers))
         .select(cols)
     )
@@ -125,7 +97,6 @@ def _ensure_lazy(obj: Union[pl.DataFrame, pl.LazyFrame]) -> pl.LazyFrame:
 
 
 def _coerce_weights_to_float(lf: pl.LazyFrame) -> pl.LazyFrame:
-    # Cast all non-'date' columns to Float64 to avoid int/float mixing
     cols = [c for c in lf.collect_schema().names() if c != "date"]
     if not cols:
         return lf
@@ -149,12 +120,10 @@ def _pad_to_universe(lf: pl.LazyFrame, universe: List[str]) -> pl.LazyFrame:
     current = lf.collect_schema().names()
     weight_cols = [c for c in current if c != "date"]
     missing = [t for t in universe if t not in weight_cols]
-    extra = [c for c in weight_cols if c not in universe]
 
     add_zero = [pl.lit(0.0).alias(t) for t in missing]
     lf2 = lf.with_columns(add_zero) if add_zero else lf
 
-    # Select in desired order and drop extras
     return lf2.select(["date", *universe])
 
 
@@ -163,6 +132,7 @@ def _max_feature_lookback(features: Sequence[str]) -> int:
 
 
 def orchestrate_model_backtests(
+        model_state: DataFrame,
         models: List[str],
         universe: List[str],
         clamp_bounds: tuple[float, float] = (-1.0, 1.0),
@@ -188,7 +158,7 @@ def orchestrate_model_backtests(
         columns: List[str] = spec["columns"]
         runner = spec["function"]  # Callable[[LazyFrame], DataFrame|LazyFrame]
 
-        lf_in = _build_model_lazy_input(tickers=tickers, columns=columns)
+        lf_in = _build_model_lazy_input(model_state, tickers=tickers, columns=columns)
         out = _ensure_lazy(runner(lf_in))  # ["date", <traded tickers...>]
         out = _coerce_weights_to_float(out)  # float weights
         out = _clamp_weights(out, lo, hi)  # clamp to bounds
@@ -199,18 +169,16 @@ def orchestrate_model_backtests(
     return results
 
 
-def construct_prices(universe: List[str]) -> pl.DataFrame:
-    base = get_model_state().clone()
-
+def construct_prices(model_state: DataFrame, universe: List[str]) -> pl.DataFrame:
     prices = (
-        base.pivot(index="date", on="ticker", values="adjusted_close_1d")
+        model_state.pivot(index="date", on="ticker", values="adjusted_close_1d")
         .sort("date")
         .with_columns(pl.col("date").cast(pl.String))
         .fill_null(strategy="forward")
         .fill_null(strategy="backward")
     )
 
-    # Keep only ['date'] + universe (in that order). If some tickers aren’t present, add them as null then fill.
+    # Keep only ['date'] + universe (in that order). If some tickers aren't present, add them as null then fill.
     present = [c for c in prices.columns if c in universe]
     missing = [t for t in universe if t not in prices.columns]
 
@@ -222,6 +190,7 @@ def construct_prices(universe: List[str]) -> pl.DataFrame:
 
 
 def orchestrate_model_simulations(
+        prices: DataFrame,
         model_insights: Dict[str, pl.LazyFrame],
         initial_value: float = 1_000_000.0,
 ) -> Dict[str, dict]:
@@ -229,8 +198,6 @@ def orchestrate_model_simulations(
     Runs all backtests and returns { model_name: backtest_result }.
     No cross-model aggregation/weighting here.
     """
-    prices = get_prices()
-
     backtester = HawkBacktester(initial_value)
     results: Dict[str, dict] = {}
 
@@ -268,10 +235,10 @@ def _enforce_l1_budget(lf: pl.LazyFrame, budget: float = 1.0) -> pl.LazyFrame:
 
 
 def orchestrate_portfolio_backtests(
-        optimizers: List[str],
         model_insights: Dict[str, pl.LazyFrame],
         backtest_results: Dict[str, dict],
         universe: List[str],
+        optimizers: List[str],
         clamp_bounds: tuple[float, float] = (-1.0, 1.0),
         l1_budget: float = 1.0,
         catalogue=None,
@@ -306,16 +273,15 @@ def orchestrate_portfolio_backtests(
 
 
 def orchestrate_portfolio_simulations(
+        prices: DataFrame,
         portfolio_insights: Dict[str, DataFrame],
         initial_value: float = 1_000_000.0,
 ):
-    prices = get_prices()
-
     backtester = HawkBacktester(initial_value)
     results: Dict[str, dict] = {}
 
-    for name, lf in portfolio_insights.items():
-        weights = lf
+    for name, weights_df in portfolio_insights.items():
+        weights = weights_df
 
         if weights.schema.get("date") != pl.String:
             weights = weights.with_columns(pl.col("date").cast(pl.String))
@@ -331,3 +297,45 @@ def orchestrate_portfolio_simulations(
         results[name] = backtester.run(prices, weights)
 
     return results
+
+
+# Example usage:
+def run_full_backtest():
+    # Load data and create model state
+    lf = read_data()
+    model_state, prices = create_model_state(
+        lf=lf,
+        features=["feature1", "feature2"],
+        start_date=datetime.date(2023, 1, 1),
+        end_date=datetime.date(2023, 12, 31),
+        universe=["AAPL", "GOOGL", "MSFT"]
+    )
+
+    # Run models
+    model_results = orchestrate_model_backtests(
+        model_state=model_state,
+        models=["model1", "model2"],
+        universe=["AAPL", "GOOGL", "MSFT"]
+    )
+
+    # Run model simulations
+    model_simulations = orchestrate_model_simulations(
+        prices=prices,
+        model_insights=model_results
+    )
+
+    # Run portfolio optimization
+    portfolio_results = orchestrate_portfolio_backtests(
+        model_insights=model_results,
+        backtest_results=model_simulations,
+        universe=["AAPL", "GOOGL", "MSFT"],
+        optimizers=["optimizer1", "optimizer2"]
+    )
+
+    # Run portfolio simulations
+    portfolio_simulations = orchestrate_portfolio_simulations(
+        prices=prices,
+        portfolio_insights=portfolio_results
+    )
+
+    return model_simulations, portfolio_simulations

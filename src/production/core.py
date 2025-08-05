@@ -5,11 +5,11 @@ from typing import Optional, Dict, Any
 import polars as pl
 from polars import DataFrame
 
-from common.IBKR import IBKR
+from common.interactive_brokers import IBKR
 
 
 def construct_goal_positions(
-        ibkr: IBKR,
+        ib_client: IBKR,
         insights: DataFrame,
         prices: DataFrame,
         universe: Optional[Iterable[str]] = None,  # optional filter
@@ -57,7 +57,7 @@ def construct_goal_positions(
         u_canon = {_canon(u) for u in universe}
         tickers = [t for t in tickers if t in u_full or _canon(t) in u_canon]
 
-    nav = float(ibkr.get_nav())
+    nav = float(ib_client.get_nav())
 
     rows = []
     for t in tickers:
@@ -79,8 +79,8 @@ def construct_goal_positions(
     })
 
 
-def calculate_rebalance_orders(
-        ibkr: IBKR,
+def construct_rebalance_orders(
+        ib_client: IBKR,
         targets: DataFrame,  # output of construct_goal_positions()
         universe: Optional[Iterable[str]] = None,
         close_out_outside_universe: bool = True,  # if True, flatten any positions not in universe/targets
@@ -116,7 +116,7 @@ def calculate_rebalance_orders(
 
     # Current positions from IB
     current_positions_map: Dict[str, int] = {}
-    for sym, pos in ibkr.account.positions.items():
+    for sym, pos in ib_client.account.positions.items():
         current_positions_map[sym] = int(pos.position)
 
     # Build canonical universe (if provided)
