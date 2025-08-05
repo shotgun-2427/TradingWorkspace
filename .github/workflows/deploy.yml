@@ -29,9 +29,11 @@ jobs:
       - name: Deploy Cloud Run Jobs and Scheduler
         env:
           PROJECT_ID: wsb-hc-qasap-ae2e
-          REGION: us-central1
+          REGION: us-east4
           SERVICE_ACCOUNT_EMAIL: prod-job-runner@wsb-hc-qasap-ae2e.iam.gserviceaccount.com
           NEWRELIC_API_KEY: ${{ secrets.NEWRELIC_API_KEY }}
+          IB_HOST: 10.4.0.2 # VM’s internal IP
+          IB_PORT: 4004 # 4004=paper, 4003=live
         run: |
           deploy_job() {
             local JOB_NAME=$1
@@ -41,12 +43,16 @@ jobs:
               --image "gcr.io/$PROJECT_ID/$IMAGE" \
               --region "$REGION" \
               --service-account "$SERVICE_ACCOUNT_EMAIL" \
+              --vpc-connector=run-conn-us-east4 \
+              --vpc-egress=private-ranges-only \
               --max-retries 3 \
               "$@" || \
             gcloud run jobs create "$JOB_NAME" \
               --image "gcr.io/$PROJECT_ID/$IMAGE" \
               --region "$REGION" \
               --service-account "$SERVICE_ACCOUNT_EMAIL" \
+              --vpc-connector=run-conn-us-east4 \
+              --vpc-egress=private-ranges-only \
               --max-retries 3 \
               "$@"
           }
@@ -74,6 +80,7 @@ jobs:
           }
 
           deploy_job production-job production-engineering \
-            --set-env-vars=environment=prod,NEWRELIC_API_KEY=$NEWRELIC_API_KEY
+            --set-env-vars=environment=prod,NEWRELIC_API_KEY=$NEWRELIC_API_KEY,IB_HOST=$IB_HOST,IB_PORT=$IB_PORT,IB_CLIENT_ID=1
+          
 
           deploy_scheduler production-engineering-scheduler "50 19 * * *" production-job
