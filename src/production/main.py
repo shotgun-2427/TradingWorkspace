@@ -3,10 +3,12 @@ import time
 
 from opentelemetry import trace
 
+from common.IBKR import IBKR
 from common.async_polars_gcs import AsyncGCSCSVWriter
 from common.logging import setup_logger
 from common.otel import setup_otel, flush_otel
-from common.utils import read_config_yaml
+from common.utils import read_config_yaml, post_to_teams
+from production.core import construct_goal_positions, calculate_rebalance_orders, generate_trade_report
 from production.validation import validate_production_config
 from trading_engine.core import (
     read_data, create_model_state, orchestrate_model_backtests, orchestrate_model_simulations,
@@ -98,61 +100,66 @@ async def main():
     logger.info(f"Portfolio simulations orchestrated for optimizers: {list(portfolio_backtests.keys())}")
     t6 = time.perf_counter()
 
-    # # ======== execution engine
-    # # ==== calculate goal positions
-    # portfolio_name, portfolio_insight = portfolio_insights.popitem()  # only one portfolio is configured in production
-    # ibkr = await IBKR.create(c.ib_gateway.host, c.ib_gateway.port, c.ib_gateway.client_id)
-    # goal_positions = construct_goal_positions(
-    #     ibkr=ibkr,
-    #     insights=portfolio_insight,
-    #     prices=price_df,
-    #     universe=c.universe,
-    # )
-    # logger.info(f"Goal positions calculated for portfolio: {portfolio_name}")
+    # ======== execution engine
+    # ==== calculate goal positions
+    portfolio_name, portfolio_insight = portfolio_insights.popitem()  # only one portfolio is configured in production
+    ibkr = await IBKR.create(c.ib_gateway.host, c.ib_gateway.port, c.ib_gateway.client_id)
+    goal_positions = construct_goal_positions(
+        ibkr=ibkr,
+        insights=portfolio_insight,
+        prices=price_df,
+        universe=c.universe,
+    )
+    logger.info(f"Goal positions calculated for portfolio: {portfolio_name}")
     t7 = time.perf_counter()
-    #
-    # # ==== calculate rebalance orders
-    # rebalance_df = calculate_rebalance_orders(
-    #     ibkr=ibkr,
-    #     targets=goal_positions,
-    #     universe=c.universe,
-    #     close_out_outside_universe=True,
-    # )
-    # logger.info(f"Rebalance orders calculated for portfolio: {portfolio_name}")
+
+    # ==== calculate rebalance orders
+    rebalance_df = calculate_rebalance_orders(
+        ibkr=ibkr,
+        targets=goal_positions,
+        universe=c.universe,
+        close_out_outside_universe=True,
+    )
+    logger.info(f"Rebalance orders calculated for portfolio: {portfolio_name}")
     t8 = time.perf_counter()
-    #
-    # # ==== generate trade report
-    # rebalance_with_px = (
-    #     rebalance_df.join(goal_positions.select(["ticker", "price"]), on="ticker", how="left")
-    # )
-    # report_txt = generate_trade_report(rebalance_with_px, as_of=current_date)
-    #
+
+    # ==== generate trade report
+    rebalance_with_px = (
+        rebalance_df.join(goal_positions.select(["ticker", "price"]), on="ticker", how="left")
+    )
+
+    # TODO: Retain all info.
+    # TEMP: ONLY INCLUDE GOAL POSITIONS
+    report_txt = generate_trade_report(rebalance_with_px, as_of=current_date)
+
+    print(report_txt)
+
     # post_to_teams(
-    #     webhook_url=c.notifications["teams_webhook"],
+    #     webhook_url=c.notifications["msteams_webhook"],
     #     message=report_txt
     # )
-    #
-    # logger.info("Production pipeline completed successfully.")
+
+    logger.info("Production pipeline completed successfully.")
 
     # ======== cleanup
     # ==== write results to GCS
-    c.dump_to_gcs(f"gs://{writer.bucket_name}/{writer.prefix}/config.json")
-
-    await writer.save(state_df, "model_state.csv")
-
-    for name, insight in model_insights.items():
-        await writer.save(insight, f"model_insights_{name}.csv")
-
-    for name, results in model_backtests.items():
-        for df_name, df in results.items():
-            await writer.save(df, f"model_backtests_{name}_{df_name}.csv")
-
-    for name, insight in portfolio_insights.items():
-        await writer.save(insight, f"portfolio_insights_{name}.csv")
-
-    for name, results in portfolio_backtests.items():
-        for df_name, df in results.items():
-            await writer.save(df, f"portfolio_backtests_{name}_{df_name}.csv")
+    # c.dump_to_gcs(f"gs://{writer.bucket_name}/{writer.prefix}/config.json")
+    #
+    # await writer.save(state_df, "model_state.csv")
+    #
+    # for name, insight in model_insights.items():
+    #     await writer.save(insight, f"model_insights_{name}.csv")
+    #
+    # for name, results in model_backtests.items():
+    #     for df_name, df in results.items():
+    #         await writer.save(df, f"model_backtests_{name}_{df_name}.csv")
+    #
+    # for name, insight in portfolio_insights.items():
+    #     await writer.save(insight, f"portfolio_insights_{name}.csv")
+    #
+    # for name, results in portfolio_backtests.items():
+    #     for df_name, df in results.items():
+    #         await writer.save(df, f"portfolio_backtests_{name}_{df_name}.csv")
 
     # await writer.save(goal_positions, "goal_positions.csv")
     # await writer.save(rebalance_df, "rebalance_orders.csv")

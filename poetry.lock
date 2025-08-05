@@ -3240,6 +3240,23 @@ files = [
 windows-terminal = ["colorama (>=0.4.6)"]
 
 [[package]]
+name = "pymsteams"
+version = "0.2.5"
+description = "Format messages and post to Microsoft Teams."
+optional = false
+python-versions = ">=3.9"
+files = [
+    {file = "pymsteams-0.2.5-py3-none-any.whl", hash = "sha256:bda78f36c4a59baa10fa21928980349a841b03c78dc7d6020f230aea4aeab2b7"},
+    {file = "pymsteams-0.2.5.tar.gz", hash = "sha256:9f76ca3a3de17b49ce3c5c314ee0e88b8bd2be78fc66f693ade1b7cabf23af70"},
+]
+
+[package.dependencies]
+requests = ">=2.20.0"
+
+[package.extras]
+async = ["httpx (>=0.28.1)"]
+
+[[package]]
 name = "pyparsing"
 version = "3.2.3"
 description = "pyparsing module - Classes and methods to define and execute parsing grammars"
@@ -4215,4 +4232,4 @@ research = []
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.11"
-content-hash = "6b12b2f96fe5d968687cd2c25a99c2f40b3a6ae23c66e99704e0bc04eecd05b6"
+content-hash = "d66afc4822ca4dbb99d691780c4a2c5328ebaf3a056c106ccbf0cefb242fae25"

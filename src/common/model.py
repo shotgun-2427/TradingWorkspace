@@ -19,6 +19,7 @@ class Config:
     models: list[str]
     optimizers: list[str]
     ib_gateway: IBGatewayConfig
+    notifications: dict
 
     def __post_init__(self):
         if isinstance(self.ib_gateway, dict):
