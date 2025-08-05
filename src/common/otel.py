@@ -1,4 +1,6 @@
 import os
+import time
+from contextlib import contextmanager
 from datetime import datetime
 
 from opentelemetry import trace, metrics
@@ -13,6 +15,17 @@ from opentelemetry.sdk.metrics.export import (
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
+
+
+@contextmanager
+def timed(metric_name: str):
+    span = trace.get_current_span()
+    start = time.perf_counter()
+    try:
+        yield
+    finally:
+        duration = time.perf_counter() - start
+        span.set_attribute(metric_name, duration)
 
 
 def setup_otel(instance_prefix: str):

@@ -2,6 +2,7 @@ pyyaml
 polars
 pyarrow
 gcsfs
+ib-async
 hawk-backtester
 opentelemetry-api
 opentelemetry-sdk
