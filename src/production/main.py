@@ -6,6 +6,7 @@ from opentelemetry import trace
 from common.async_polars_gcs import AsyncGCSCSVWriter
 from common.interactive_brokers import IBKR
 from common.logging import setup_logger
+from common.model import Config
 from common.otel import setup_otel, flush_otel
 from common.utils import read_config_yaml, post_to_teams
 from production.core import construct_goal_positions, calculate_rebalance_orders, generate_trade_report
@@ -22,30 +23,30 @@ class NotATradingDayError(Exception):
     pass
 
 
-async def main():
-    logger.info("Starting production pipeline.")
-    # ======== setup
-    # ==== initialization
-    current_date = time.strftime("%Y-%m-%d")
-    writer = AsyncGCSCSVWriter(
+async def setup() -> tuple:
+    """Setup function to initialize resources if needed."""
+    # Config
+    config = read_config_yaml("production/config.yaml")
+    validate_production_config(config)
+    current_date_str = time.strftime("%Y-%m-%d")
+    logger.info(f"Configuration loaded: {config}")
+
+    # GCS Writer
+    gcs_writer = AsyncGCSCSVWriter(
         bucket_name="wsb-hc-qasap-bucket-1",
-        prefix=f"hcf/production_audit/{current_date}",
-        max_workers=4,
+        prefix=f"hcf/production_audit/{current_date_str}",
     )
-    span = trace.get_current_span()
-    logger.info(f"Using GCS bucket: {writer.bucket_name}, prefix: {writer.prefix}")
+    logger.info(f"Using GCS bucket: {gcs_writer.bucket_name}, prefix: {gcs_writer.prefix}")
 
-    # ==== read configuration
-    c = read_config_yaml("production/config.yaml")
-    validate_production_config(c)
-    logger.info(f"Configuration loaded: {c}")
-    t0 = time.perf_counter()
+    # OpenTelemetry
+    current_span = trace.get_current_span()
 
-    # ======== trading engine
-    # ==== read data
+    return config, current_date_str, gcs_writer, current_span
+
+
+async def run_trading_engine(config: Config, writer: AsyncGCSCSVWriter, current_date: str):
     raw_lf = read_data()
     logger.info(f"Data read complete")
-    t1 = time.perf_counter()
 
     # ==== validate data (check if the latest date in the data is "current" date, otherwise it's not a trading day)
     latest_date = raw_lf.select("date").sort("date", descending=True).first().collect().item()
@@ -59,18 +60,15 @@ async def main():
     # ==== create model state
     state_df, price_df = create_model_state(
         lf=raw_lf,
-        features=c.model_state_features,
-        start_date=c.start_date,
-        end_date=c.end_date,
-        universe=c.universe,
+        features=config.model_state_features,
+        start_date=config.start_date,
+        end_date=config.end_date,
+        universe=config.universe,
     )
-    logger.info(f"Model state created for features: {list(c.model_state_features)}")
-    t2 = time.perf_counter()
+    logger.info(f"Model state created for features: {list(config.model_state_features)}")
 
     # ==== orchestrate model backtests
-    model_insights = orchestrate_model_backtests(c.models, c.universe)
-    logger.info(f"Model backtests orchestrated for models: {list(model_insights.keys())}")
-    t3 = time.perf_counter()
+    model_insights = orchestrate_model_backtests(config.models, config.universe)
 
     # ==== orchestrate model simulations
     model_backtests = orchestrate_model_simulations(
@@ -78,17 +76,14 @@ async def main():
         initial_value=1_000_000.0,
     )
 
-    logger.info(f"Model simulations orchestrated for models: {list(model_backtests.keys())}")
-    t4 = time.perf_counter()
 
     # ==== orchestrate portfolio backtests
     portfolio_insights = orchestrate_portfolio_backtests(
-        optimizers=c.optimizers,
+        optimizers=config.optimizers,
         model_insights=model_insights,
         backtest_results=model_backtests,
-        universe=c.universe,
+        universe=config.universe,
     )
-    logger.info(f"Portfolio backtests orchestrated for optimizers: {list(portfolio_insights.keys())}")
     t5 = time.perf_counter()
 
     # ==== orchestrate portfolio simulations
@@ -97,8 +92,24 @@ async def main():
         initial_value=1_000_000.0,
     )
 
-    logger.info(f"Portfolio simulations orchestrated for optimizers: {list(portfolio_backtests.keys())}")
     t6 = time.perf_counter()
+
+
+async def run_execution_engine():
+    ...
+
+
+async def main():
+    logger.info("Starting production pipeline.")
+    # ======== setup
+    c, current_date, writer, span = await setup()
+
+    await run_trading_engine(c, writer, current_date)
+
+
+    # ======== trading engine
+    # ==== read data
+
 
     # ======== execution engine
     # ==== calculate goal positions
