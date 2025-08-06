@@ -10,7 +10,7 @@ from common.interactive_brokers import IBKR
 from common.logging import setup_logger
 from common.model import Config
 from common.otel import setup_otel, flush_otel, timed
-from common.utils import read_config_yaml
+from common.utils import read_config_yaml, post_to_teams
 from production.core import construct_goal_positions, construct_rebalance_orders, generate_trade_report
 from production.validation import validate_production_config
 from trading_engine.core import (
@@ -168,9 +168,9 @@ async def run_execution_engine(
         as_of=current_date,
     )
 
-    await writer.save_text(trade_report, "trade_report.txt", content_type="text/html")
+    await writer.save_text(trade_report, "trade_report.txt", content_type="text/plain; charset=utf-8")
     # construct location
-    trade_report_location = f"gs://{writer.bucket_name}/{writer.prefix}/trade_report.txt"
+    trade_report_location = f"https://storage.cloud.google.com/{writer.bucket_name}/{writer.prefix}/trade_report.txt"
     return trade_report_location
 
 
@@ -208,10 +208,10 @@ async def main():
 
     logger.info(message)
 
-    # post_to_teams(
-    #     webhook_url=c.notifications["msteams_webhook"],
-    #     message=message
-    # )
+    post_to_teams(
+        webhook_url=c.notifications["msteams_webhook"],
+        message=message
+    )
 
 
 if __name__ == "__main__":
