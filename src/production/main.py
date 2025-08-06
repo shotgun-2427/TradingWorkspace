@@ -1,5 +1,6 @@
 import asyncio
-import time
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from opentelemetry import trace
 from polars import DataFrame
@@ -9,7 +10,7 @@ from common.interactive_brokers import IBKR
 from common.logging import setup_logger
 from common.model import Config
 from common.otel import setup_otel, flush_otel, timed
-from common.utils import read_config_yaml, post_to_teams
+from common.utils import read_config_yaml
 from production.core import construct_goal_positions, construct_rebalance_orders, generate_trade_report
 from production.validation import validate_production_config
 from trading_engine.core import (
@@ -29,7 +30,7 @@ async def setup() -> tuple:
     # Config
     config = read_config_yaml("production/config.yaml")
     validate_production_config(config)
-    current_date_str = time.strftime("%Y-%m-%d")
+    current_date_str = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
     logger.info(f"Configuration loaded: {config}")
 
     # GCS Writer
@@ -50,6 +51,8 @@ async def run_trading_engine(config: Config, writer: AsyncGCSWriter, current_dat
     latest_date = lf.select("date").sort("date", descending=True).first().collect().item()
 
     if latest_date.strftime("%Y-%m-%d") != current_date:
+        print(latest_date.strftime("%Y-%m-%d"))
+        print(current_date)
         logger.warning("Not a trading day.")
         raise NotATradingDayException()
 
@@ -205,10 +208,10 @@ async def main():
 
     logger.info(message)
 
-    post_to_teams(
-        webhook_url=c.notifications["msteams_webhook"],
-        message=message
-    )
+    # post_to_teams(
+    #     webhook_url=c.notifications["msteams_webhook"],
+    #     message=message
+    # )
 
 
 if __name__ == "__main__":

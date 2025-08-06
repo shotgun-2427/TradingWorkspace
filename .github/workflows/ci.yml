@@ -1,13 +1,13 @@
 name: CI / Build / Deploy
 
 on:
-  push:
+  workflow_dispatch:
 
 jobs:
-  # 1) Run tests on every branch
   test:
     name: Test & Code Coverage
     runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
 
     steps:
       - name: Checkout repository
@@ -29,7 +29,6 @@ jobs:
       - name: Run pytest with coverage threshold
         run: poetry run pytest --cov=src/trading_engine --cov-fail-under=0
 
-  # 2) Build (only on main, after tests pass)
   build:
     name: Build & Push Docker Images
     runs-on: ubuntu-latest

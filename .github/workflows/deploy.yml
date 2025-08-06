@@ -82,5 +82,5 @@ jobs:
           deploy_job production-job production-engineering \
             --set-env-vars=environment=prod,NEWRELIC_API_KEY=$NEWRELIC_API_KEY,IB_HOST=$IB_HOST,IB_PORT=$IB_PORT,IB_CLIENT_ID=1
           
-
+          
           deploy_scheduler production-engineering-scheduler "50 19 * * *" production-job
