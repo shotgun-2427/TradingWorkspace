@@ -136,16 +136,13 @@ def orchestrate_model_backtests(
         models: List[str],
         universe: List[str],
         clamp_bounds: tuple[float, float] = (-1.0, 1.0),
-        registry=None,
+        registry=MODELS,
 ) -> Dict[str, pl.LazyFrame]:
     """
     Run selected models and return per-model LazyFrames padded to the full universe:
       { model_name: LazyFrame(["date"] + universe) }, weights in [-1, 1].
     No aggregation or L1 normalization here.
     """
-    if not registry:
-        registry = MODELS
-
     lo, hi = clamp_bounds
     results: Dict[str, pl.LazyFrame] = {}
 
@@ -241,7 +238,7 @@ def orchestrate_portfolio_backtests(
         optimizers: List[str],
         clamp_bounds: tuple[float, float] = (-1.0, 1.0),
         l1_budget: float = 1.0,
-        registry=None,
+        registry=OPTIMIZERS,
 ) -> Dict[str, DataFrame]:
     """
     Run portfolio optimizers on the model insights and per-model backtests.
@@ -250,9 +247,6 @@ def orchestrate_portfolio_backtests(
     All post-processing (padding, float coercion, clamping, L1 budget, price alignment)
     happens here so optimizers stay minimal.
     """
-    if not registry:
-        registry = OPTIMIZERS
-
     results: Dict[str, DataFrame] = {}
     for name in optimizers:
         if name not in registry:
@@ -299,43 +293,58 @@ def orchestrate_portfolio_simulations(
     return results
 
 
-# Example usage:
-def run_full_backtest():
+def run_full_backtest(
+        universe: list[str],
+        features: list[str],
+        models: list[str],
+        optimizers: list[str],
+        start_date: datetime.date,
+        end_date: datetime.date,
+        initial_value: int = 1_000_000,
+        model_registry: dict = MODELS,
+        optimizer_registry: dict = OPTIMIZERS
+):
+    """Complete backtest orchestration."""
+
     # Load data and create model state
     lf = read_data()
     model_state, prices = create_model_state(
         lf=lf,
-        features=["feature1", "feature2"],
-        start_date=datetime.date(2023, 1, 1),
-        end_date=datetime.date(2023, 12, 31),
-        universe=["AAPL", "GOOGL", "MSFT"]
+        features=features,
+        start_date=start_date,
+        end_date=end_date,
+        universe=universe
     )
 
     # Run models
     model_results = orchestrate_model_backtests(
         model_state=model_state,
-        models=["model1", "model2"],
-        universe=["AAPL", "GOOGL", "MSFT"]
+        models=models,
+        universe=universe,
+        registry=model_registry
     )
 
     # Run model simulations
     model_simulations = orchestrate_model_simulations(
         prices=prices,
-        model_insights=model_results
+        model_insights=model_results,
+        initial_value=initial_value
     )
 
     # Run portfolio optimization
     portfolio_results = orchestrate_portfolio_backtests(
         model_insights=model_results,
         backtest_results=model_simulations,
-        universe=["AAPL", "GOOGL", "MSFT"],
-        optimizers=["optimizer1", "optimizer2"]
+        universe=universe,
+        optimizers=optimizers,
+        registry=optimizer_registry
     )
 
     # Run portfolio simulations
     portfolio_simulations = orchestrate_portfolio_simulations(
         prices=prices,
-        portfolio_insights=portfolio_results
+        portfolio_insights=portfolio_results,
+        initial_value=initial_value
     )
 
     return model_simulations, portfolio_simulations

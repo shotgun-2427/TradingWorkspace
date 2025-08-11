@@ -8,5 +8,4 @@ OPTIMIZERS = {
     "min_avg_drawdown": {
         "function": MinAvgDrawdownOptimizer(window_days=252)
     }
-
 }
