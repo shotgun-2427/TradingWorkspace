@@ -11,7 +11,7 @@ from common.logging import setup_logger
 from common.model import Config
 from common.otel import setup_otel, flush_otel, timed
 from common.utils import read_config_yaml, post_to_teams
-from production.core import construct_goal_positions, construct_rebalance_orders, generate_trade_report
+from production.core import construct_goal_positions, construct_rebalance_orders, to_ibkr_basket_csv
 from production.validation import validate_production_config
 from trading_engine.core import (
     read_data, create_model_state, orchestrate_model_backtests, orchestrate_model_simulations,
@@ -127,7 +127,6 @@ async def run_execution_engine(
         writer: AsyncGCSWriter,
         prices: DataFrame,
         portfolio_insight: DataFrame,
-        current_date: str
 ):
     ib_client = await IBKR.create(
         hostname=config.ib_gateway.host,
@@ -143,9 +142,9 @@ async def run_execution_engine(
             prices=prices,
             universe=config.universe,
         )
-
     await writer.save_polars(goal_positions, "goal_positions.csv")
 
+    # ==== build rebalance orders
     with timed("pipeline.rebalance_orders_duration"):
         rebalance_df = construct_rebalance_orders(
             ib_client=ib_client,
@@ -153,25 +152,22 @@ async def run_execution_engine(
             universe=config.universe,
             close_out_outside_universe=True,
         )
-
     await writer.save_polars(rebalance_df, "rebalance_orders.csv")
 
     logger.info("FINISHED EXECUTION")
 
-    # ==== generate trade report
-    rebalance_with_px = (
-        rebalance_df.join(goal_positions.select(["ticker", "price"]), on="ticker", how="left")
+    # ==== build BasketTrader CSV (all orders as MOC, SMART routed, TIF=DAY)
+    basket_csv = to_ibkr_basket_csv(
+        rebalance_df,
+        order_type="MOC",
+        tif="DAY",
+        exchange="SMART",
     )
 
-    trade_report = generate_trade_report(
-        df=rebalance_with_px,
-        as_of=current_date,
-    )
-
-    await writer.save_text(trade_report, "trade_report.txt", content_type="text/plain; charset=utf-8")
-    # construct location
-    trade_report_location = f"https://storage.cloud.google.com/{writer.bucket_name}/{writer.prefix}/trade_report.txt"
-    return trade_report_location
+    # ==== write CSV to GCS and return link
+    await writer.save_text(basket_csv, "ibkr_basket_moc.csv", content_type="text/csv; charset=utf-8")
+    basket_url = f"https://storage.cloud.google.com/{writer.bucket_name}/{writer.prefix}/ibkr_basket_moc.csv"
+    return basket_url
 
 
 async def main():
@@ -185,9 +181,9 @@ async def main():
     # ==== execution engine
     portfolio_name, portfolio_insight = portfolio_insights.popitem()
 
-    report_path = None
+    basket_path = None
     try:
-        report_path = await run_execution_engine(c, writer, prices, portfolio_insight, current_date)
+        basket_path = await run_execution_engine(c, writer, prices, portfolio_insight)
     except Exception as e:
         logger.error(f"Failed to run execution engine: {e}")
 
@@ -198,20 +194,15 @@ async def main():
 
     # Post Goal Positions to Teams
     last_row_dict = portfolio_insight[-1].to_dict(as_series=False)
-
     goal_position_list = [f"{k}: {round(v[0] * 100, 2)}%" for k, v in last_row_dict.items() if k != 'date']
     goal_position_string = "<br>".join(goal_position_list)
     message = f"<strong>Goal Positions ({current_date})</strong><br>{goal_position_string}"
 
-    if report_path:
-        message += f"<br><br>Execution Report: <a href='{report_path}'>View Report</a>"
+    if basket_path:
+        message += f"<br><br>IBKR Basket (MOC): <a href='{basket_path}'>Download CSV</a>"
 
     logger.info(message)
-
-    post_to_teams(
-        webhook_url=c.notifications["msteams_webhook"],
-        message=message
-    )
+    post_to_teams(webhook_url=c.notifications['msteams_webhook'], message=message)
 
 
 if __name__ == "__main__":

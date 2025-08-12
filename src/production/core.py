@@ -1,4 +1,5 @@
 import math
+import re
 from typing import Iterable
 from typing import Optional, Dict, Any
 
@@ -173,14 +174,45 @@ def construct_rebalance_orders(
     return df
 
 
-def generate_trade_report(
+def to_ibkr_basket_csv(
         df: DataFrame,
-        as_of: str,
+        *,
+        order_type: str = "MOC",
+        tif: str = "DAY",
+        exchange: str = "SMART",
 ) -> str:
-    return f"""
-    {'=' * 40}
-    Hawk Daily Trade Report: {as_of}
-    {'=' * 40}
-    {str(df)}
-    {'=' * 40}
     """
+    Convert rebalance orders to an IBKR BasketTrader CSV.
+
+    Input df schema (from construct_rebalance_orders):
+      ["ticker","current_shares","target_shares","delta_shares","action","order_quantity"]
+
+    Output CSV columns (header order is flexible in TWS):
+      Symbol,SecType,Currency,Exchange,Action,Quantity,OrderType,LmtPrice,AuxPrice,TIF
+
+    Notes:
+      - ETFs go as SecType=STK, Currency=USD.
+      - For MOC: LmtPrice and AuxPrice are blank, TIF typically DAY.
+    """
+    if df.is_empty():
+        return "Symbol,SecType,Currency,Exchange,Action,Quantity,OrderType,LmtPrice,AuxPrice,TIF\n"
+
+    def _canon(sym: str) -> str:
+        # strip region suffixes like '-US' / '.US' if present
+        s = sym.split("-")[0]
+        s = re.sub(r"\.US$", "", s)
+        return s
+
+    header = ["Symbol", "SecType", "Currency", "Exchange", "Action", "Quantity", "OrderType", "LmtPrice", "AuxPrice",
+              "TIF"]
+    lines = [",".join(header)]
+
+    for row in df.select(["ticker", "action", "order_quantity"]).to_dicts():
+        symbol = _canon(row["ticker"])
+        action = row["action"]  # BUY or SELL
+        qty = int(row["order_quantity"])
+        # For MOC, leave LmtPrice and AuxPrice blank
+        line = f"{symbol},STK,USD,{exchange},{action},{qty},{order_type},,,{tif}"
+        lines.append(line)
+
+    return "\n".join(lines) + "\n"
