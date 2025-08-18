@@ -11,8 +11,8 @@ from common.logging import setup_logger
 from common.model import Config
 from common.otel import setup_otel, flush_otel, timed
 from common.utils import read_config_yaml, post_to_teams
-from production.core import construct_goal_positions, construct_rebalance_orders, to_ibkr_basket_csv
-from production.validation import validate_production_config
+from production.paper.core import construct_goal_positions, construct_rebalance_orders, to_ibkr_basket_csv
+from production.paper.validation import validate_production_config
 from trading_engine.core import (
     read_data, create_model_state, orchestrate_model_backtests, orchestrate_model_simulations,
     orchestrate_portfolio_backtests, orchestrate_portfolio_simulations
@@ -28,10 +28,12 @@ class NotATradingDayException(Exception):
 async def setup() -> tuple:
     """Setup function to initialize resources if needed."""
     # Config
-    config = read_config_yaml("production/config.yaml")
+    config = read_config_yaml("production/paper/config.yaml")
     validate_production_config(config)
-    current_date_str = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
     logger.info(f"Configuration loaded: {config}")
+
+    # TODO: Add max(current_date, config.start_date) logic for testing
+    current_date_str = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
 
     # GCS Writer
     gcs_writer = AsyncGCSWriter(

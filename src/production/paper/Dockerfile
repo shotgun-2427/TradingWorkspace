@@ -17,14 +17,14 @@ RUN curl https://sh.rustup.rs -sSf | sh -s -- -y
 ENV PATH="/root/.cargo/bin:${PATH}"
 
 # Install Python dependencies
-COPY src/production/requirements.txt .
+COPY src/production/paper/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy source code
-COPY src/production /app/production
+COPY src/production/paper /app/production/paper
 COPY src/common /app/common
 COPY src/trading_engine /app/trading_engine
 
 ENV PYTHONPATH=/app/
 
-CMD ["python", "production/main.py"]
+CMD ["python", "production/paper/main.py"]

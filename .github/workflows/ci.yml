@@ -34,7 +34,7 @@ jobs:
           docker buildx build \
             --platform linux/amd64 \
             -t gcr.io/$PROJECT_ID/production-engineering \
-            -f src/production/Dockerfile . \
+            -f src/production/paper/Dockerfile . \
             --push
 
 
