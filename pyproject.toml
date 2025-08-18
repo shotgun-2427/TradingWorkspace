@@ -19,6 +19,7 @@ pytest = "^8.4.1"
 pytest-cov = "^6.2.1"
 pymsteams = "^0.2.5"
 ib-async = "^2.0.1"
+scipy = "^1.11.0"
 jupyterlab = { version = ">=4", optional = true }
 ipywidgets = { version = ">=8", optional = true }
 matplotlib = { version = ">=3.8", optional = true }
