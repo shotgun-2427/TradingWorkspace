@@ -53,8 +53,7 @@ async def run_trading_engine(config: Config, writer: AsyncGCSWriter, current_dat
     latest_date = lf.select("date").sort("date", descending=True).first().collect().item()
 
     if latest_date.strftime("%Y-%m-%d") != current_date:
-        print(latest_date.strftime("%Y-%m-%d"))
-        print(current_date)
+        logger.info(f"Latest date in data: {latest_date}, current date: {current_date}")
         logger.warning("Not a trading day.")
         raise NotATradingDayException()
 
