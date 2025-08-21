@@ -161,7 +161,7 @@ async def run_execution_engine(
     basket_csv = to_ibkr_basket_csv(
         rebalance_df,
         order_type="MOC",
-        tif="DAY",
+        time_in_force="DAY",
         exchange="SMART",
     )
 

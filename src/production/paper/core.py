@@ -178,7 +178,7 @@ def to_ibkr_basket_csv(
         df: DataFrame,
         *,
         order_type: str = "MOC",
-        tif: str = "DAY",
+        time_in_force: str = "DAY",
         exchange: str = "SMART",
 ) -> str:
     """
@@ -188,31 +188,34 @@ def to_ibkr_basket_csv(
       ["ticker","current_shares","target_shares","delta_shares","action","order_quantity"]
 
     Output CSV columns (header order is flexible in TWS):
-      Symbol,SecType,Currency,Exchange,Action,Quantity,OrderType,LmtPrice,AuxPrice,TIF
+      Symbol,SecType,Currency,Exchange,Action,Quantity,OrderType,LmtPrice,AuxPrice,TimeInForce
 
     Notes:
       - ETFs go as SecType=STK, Currency=USD.
-      - For MOC: LmtPrice and AuxPrice are blank, TIF typically DAY.
+      - For MOC: LmtPrice and AuxPrice are blank.
     """
+    header = [
+        "Symbol", "SecType", "Currency", "Exchange", "Action", "Quantity",
+        "OrderType", "LmtPrice", "AuxPrice", "TimeInForce"
+    ]
+
     if df.is_empty():
-        return "Symbol,SecType,Currency,Exchange,Action,Quantity,OrderType,LmtPrice,AuxPrice,TIF\n"
+        return ",".join(header) + "\n"
 
     def _canon(sym: str) -> str:
         # strip region suffixes like '-US' / '.US' if present
         s = sym.split("-")[0]
-        s = re.sub(r"\.US$", "", s)
+        s = re.sub(r"\.US$", "", s, flags=re.IGNORECASE)
         return s
 
-    header = ["Symbol", "SecType", "Currency", "Exchange", "Action", "Quantity", "OrderType", "LmtPrice", "AuxPrice",
-              "TIF"]
     lines = [",".join(header)]
 
     for row in df.select(["ticker", "action", "order_quantity"]).to_dicts():
         symbol = _canon(row["ticker"])
-        action = row["action"]  # BUY or SELL
+        action = str(row["action"]).upper()  # BUY or SELL
         qty = int(row["order_quantity"])
         # For MOC, leave LmtPrice and AuxPrice blank
-        line = f"{symbol},STK,USD,{exchange},{action},{qty},{order_type},,,{tif}"
+        line = f"{symbol},STK,USD,{exchange},{action},{qty},{order_type},,,{time_in_force}"
         lines.append(line)
 
     return "\n".join(lines) + "\n"
