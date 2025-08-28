@@ -1,0 +1,49 @@
+name: Build & Push Docker Images (simulations-paper)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build & Push Docker Image (simulations-paper)
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Configure Docker for GCR
+        run: gcloud auth configure-docker
+
+      - name: Compute image tags
+        id: meta
+        run: |
+          echo "PROJECT_ID=wsb-hc-qasap-ae2e" >> "$GITHUB_OUTPUT"
+          echo "IMAGE_NAME=simulations-paper" >> "$GITHUB_OUTPUT"
+          echo "TAG=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Buildx create
+        run: docker buildx create --use || echo "Builder already exists"
+
+      - name: Build and push (simulations-paper)
+        run: |
+          PROJECT_ID="${{ steps.meta.outputs.PROJECT_ID }}"
+          IMAGE_NAME="${{ steps.meta.outputs.IMAGE_NAME }}"
+          TAG="${{ steps.meta.outputs.TAG }}"
+
+          docker buildx build \
+            --platform linux/amd64 \
+            -t gcr.io/$PROJECT_ID/$IMAGE_NAME:$TAG \
+            -t gcr.io/$PROJECT_ID/$IMAGE_NAME:latest \
+            -f src/production/simulations/Dockerfile \
+            . \
+            --push
