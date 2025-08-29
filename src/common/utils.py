@@ -50,3 +50,9 @@ def post_to_teams(webhook_url: str, message: str):
     card = pymsteams.connectorcard(webhook_url)
     card.text(message)
     assert card.send()
+
+    
+def _get_metric(df, metric):
+    """ Helper to extract metric value from DataFrame. """
+    result = df.filter(pl.col("metric") == metric)
+    return result["value"][0] if len(result) > 0 else 0.0

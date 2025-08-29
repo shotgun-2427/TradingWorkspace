@@ -1,6 +1,6 @@
 from trading_engine.core import orchestrate_portfolio_backtests, orchestrate_portfolio_simulations
 import polars as pl
-from research.utils import _get_metric
+from common.utils import _get_metric
 
 def orchestrate_marginal_simulations(config, model_insights, model_backtests, main_portfolio_backtests, prices):
     results = {}
