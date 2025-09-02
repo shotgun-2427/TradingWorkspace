@@ -1,5 +1,5 @@
 pyyaml
-polars
+polars==1.32.2
 pyarrow
 gcsfs
 hawk-backtester
