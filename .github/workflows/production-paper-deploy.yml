@@ -66,10 +66,11 @@ jobs:
             local NAME=$1
             local CRON=$2
             local JOB=$3
+            local TZ=$4
             gcloud scheduler jobs update http "$NAME" \
               --location="$REGION" \
               --schedule="$CRON" \
-              --time-zone="UTC" \
+              --time-zone="$TZ" \
               --uri="https://$REGION-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/$PROJECT_ID/jobs/$JOB:run" \
               --http-method=POST \
               --oauth-service-account-email="$SERVICE_ACCOUNT_EMAIL" \
@@ -77,7 +78,7 @@ jobs:
             gcloud scheduler jobs create http "$NAME" \
               --location="$REGION" \
               --schedule="$CRON" \
-              --time-zone="UTC" \
+              --time-zone="$TZ" \
               --uri="https://$REGION-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/$PROJECT_ID/jobs/$JOB:run" \
               --http-method=POST \
               --oauth-service-account-email="$SERVICE_ACCOUNT_EMAIL" \
@@ -96,6 +97,6 @@ jobs:
           deploy_job "$JOB_NAME" "$FULL_IMAGE" \
             --set-env-vars=environment=prod,variant=paper,NEWRELIC_API_KEY=$NEWRELIC_API_KEY,IB_HOST=$IB_HOST,IB_PORT=$IB_PORT,IB_CLIENT_ID=1
 
-          # Schedule run daily at 19:40 UTC
-          deploy_scheduler production-paper-scheduler "40 15 * * 1-5" production-paper-job "America/New_York"
+          # Schedule at 2:40 PM America/Chicago daily
+          deploy_scheduler production-paper-scheduler "40 14 * * 1-5" production-paper-job "America/Chicago"
 
