@@ -6,12 +6,12 @@ from opentelemetry import trace
 from polars import DataFrame
 
 from common.async_gcs_writer import AsyncGCSWriter
+from common.exceptions import NotATradingDayException
 from common.interactive_brokers import IBKR
 from common.logging import setup_logger
 from common.model import Config
 from common.otel import setup_otel, flush_otel, timed
 from common.utils import read_config_yaml, post_to_teams
-from common.exceptions import NotATradingDayException
 from production.paper.core import construct_goal_positions, construct_rebalance_orders, to_ibkr_basket_csv
 from production.paper.validation import validate_production_config
 from trading_engine.core import (
@@ -35,7 +35,7 @@ async def setup() -> tuple:
     # GCS Writer
     gcs_writer = AsyncGCSWriter(
         bucket_name="wsb-hc-qasap-bucket-1",
-        prefix=f"hcf/production_audit/{current_date_str}",
+        prefix=f"hcf/paper/production_audit/{current_date_str}",
     )
     logger.info(f"Using GCS bucket: {gcs_writer.bucket_name}, prefix: {gcs_writer.prefix}")
 
@@ -43,7 +43,7 @@ async def setup() -> tuple:
 
 
 async def run_trading_engine(config: Config, writer: AsyncGCSWriter, current_date: str):
-    with timed("pipeline.read_data_duration"):
+    with timed("production.read_data_duration"):
         lf = read_data()
 
     # ==== validate data (check if the latest date in the data is "current" date, otherwise it's not a trading day)
@@ -55,7 +55,7 @@ async def run_trading_engine(config: Config, writer: AsyncGCSWriter, current_dat
         raise NotATradingDayException()
 
     # ==== create model state
-    with timed("pipeline.model_state_duration"):
+    with timed("production.model_state_duration"):
         model_state, prices = create_model_state(
             lf=lf,
             features=config.model_state_features,
@@ -67,7 +67,7 @@ async def run_trading_engine(config: Config, writer: AsyncGCSWriter, current_dat
     await writer.save_polars(prices, "prices.csv")
 
     # ==== orchestrate model backtests
-    with timed("pipeline.model_backtests_duration"):
+    with timed("production.model_backtests_duration"):
         model_insights = orchestrate_model_backtests(
             model_state=model_state,
             models=config.models,
@@ -79,7 +79,7 @@ async def run_trading_engine(config: Config, writer: AsyncGCSWriter, current_dat
     ))
 
     # ==== orchestrate model simulations
-    with timed("pipeline.model_simulations_duration"):
+    with timed("production.model_simulations_duration"):
         model_backtests = orchestrate_model_simulations(
             prices=prices,
             model_insights=model_insights,
@@ -92,7 +92,7 @@ async def run_trading_engine(config: Config, writer: AsyncGCSWriter, current_dat
     ))
 
     # ==== orchestrate portfolio backtests
-    with timed("pipeline.portfolio_backtests_duration"):
+    with timed("production.portfolio_backtests_duration"):
         portfolio_insights = orchestrate_portfolio_backtests(
             optimizers=config.optimizers,
             model_insights=model_insights,
@@ -105,7 +105,7 @@ async def run_trading_engine(config: Config, writer: AsyncGCSWriter, current_dat
     ))
 
     # ==== orchestrate portfolio simulations
-    with timed("pipeline.portfolio_simulations_duration"):
+    with timed("production.portfolio_simulations_duration"):
         portfolio_backtests = orchestrate_portfolio_simulations(
             prices=prices,
             portfolio_insights=portfolio_insights,
@@ -133,7 +133,7 @@ async def run_execution_engine(
     )
 
     # ==== calculate goal positions
-    with timed("pipeline.goal_positions_duration"):
+    with timed("production.goal_positions_duration"):
         goal_positions = construct_goal_positions(
             ib_client=ib_client,
             insights=portfolio_insight,
@@ -143,7 +143,7 @@ async def run_execution_engine(
     await writer.save_polars(goal_positions, "goal_positions.csv")
 
     # ==== build rebalance orders
-    with timed("pipeline.rebalance_orders_duration"):
+    with timed("production.rebalance_orders_duration"):
         rebalance_df = construct_rebalance_orders(
             ib_client=ib_client,
             targets=goal_positions,
@@ -151,8 +151,6 @@ async def run_execution_engine(
             close_out_outside_universe=True,
         )
     await writer.save_polars(rebalance_df, "rebalance_orders.csv")
-
-    logger.info("FINISHED EXECUTION")
 
     # ==== build BasketTrader CSV (all orders as MOC, SMART routed, TIF=DAY)
     basket_csv = to_ibkr_basket_csv(
@@ -204,10 +202,10 @@ async def main():
 
 
 if __name__ == "__main__":
-    setup_otel('production_engineering')
+    setup_otel('production_paper')
     tracer = trace.get_tracer(__name__)
 
-    with tracer.start_as_current_span("pipeline") as span:
+    with tracer.start_as_current_span("production") as span:
         try:
             asyncio.run(main())
         except NotATradingDayException:
