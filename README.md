@@ -44,6 +44,3 @@ Before you begin, ensure you have the following:
 * [GitHub Docs](https://docs.github.com/)
 * [Google Cloud Authentication](https://cloud.google.com/docs/authentication/getting-started)
 
----
-
-Would you like me to expand this into a **full contribution-ready README** (with sections like *Project Overview*, *Contributing*, *Testing*, and *Deployment*), or keep it strictly to **setup and prerequisites** for now?
