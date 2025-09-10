@@ -9,5 +9,10 @@ services:
     environment:
       - GOOGLE_APPLICATION_CREDENTIALS=/sa.json   # path *inside* container
     volumes:
-      - ../..:/work                                # repo root
-      - ${GOOGLE_APPLICATION_CREDENTIALS}:/sa.json:ro   # host SA -> /sa.json
+      - type: bind
+        source: ${GOOGLE_APPLICATION_CREDENTIALS}
+        target: /sa.json
+        read_only: true
+      - type: bind
+        source: ../..
+        target: /work
