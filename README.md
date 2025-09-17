@@ -44,3 +44,27 @@ Before you begin, ensure you have the following:
 * [GitHub Docs](https://docs.github.com/)
 * [Google Cloud Authentication](https://cloud.google.com/docs/authentication/getting-started)
 
+
+## Poetry Instructions
+
+> [!NOTE]
+> The following instructions are for macOS/Linux machines and may not work exactly as expected on Windows systems.
+
+
+to install the dependencies using poetry, run the following
+```bash
+poetry install
+```
+
+To register the poetry enviroment as a jupyter kernel (for use with IDE notebook editors) 
+(this installs the kernel in a user specific location)
+
+```bash
+poetry run python -m ipykernel install --user --name trading-engine --display-name "Python (poetry) trading-engine"
+```
+(Optional) Check that the jupyter kernel installed properly
+```bash
+poetry run jupyter kernelspec list
+```
+
+After registering the kernel, you may need to restart your IDE (vscode, cursor) for it to display as an option.
