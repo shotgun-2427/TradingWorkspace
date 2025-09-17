@@ -24,9 +24,10 @@ class Config:
     universe: list[str]
     model_state_features: list[str]
     models: list[str]
-    optimizers: list[str]
+    aggregators: list[str]
     ib_gateway: IBGatewayConfig
     notifications: dict
+    portfolio_optimizers: list[str] | None = None
 
     def __post_init__(self):
         if isinstance(self.ib_gateway, dict):
@@ -44,5 +45,5 @@ class Config:
         fs = GCSFileSystem()
         json_string = json.dumps(dataclasses.asdict(self), default=str, indent=4)
 
-        with fs.open(gcs_url, 'w') as f:
+        with fs.open(gcs_url, "w") as f:
             f.write(json_string)

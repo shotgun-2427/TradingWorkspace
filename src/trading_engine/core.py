@@ -9,8 +9,8 @@ from common.constants import ProcessingMode
 from common.logging import setup_logger
 from trading_engine.model_state import FEATURES
 from trading_engine.models import MODELS
-from trading_engine.optimizers import OPTIMIZERS
-from trading_engine.optimizers.catalogue.equal_weight import EqualWeightOptimizer
+from trading_engine.aggregators import AGGREGATORS
+from trading_engine.optimizers import PORTFOLIO_OPTIMIZERS
 from trading_engine.utils import calculate_calendar_lookback
 
 logger = setup_logger(__name__)
@@ -27,12 +27,12 @@ def read_data() -> LazyFrame:
 
 
 def create_model_state(
-        lf: LazyFrame,
-        features: list[str],
-        start_date: datetime.date,
-        end_date: datetime.date,
-        universe: List[str],
-        registry=None
+    lf: LazyFrame,
+    features: list[str],
+    start_date: datetime.date,
+    end_date: datetime.date,
+    universe: List[str],
+    registry=None,
 ) -> tuple[DataFrame, DataFrame]:
     """
     Build model state with warmup lookback and eager feature support.
@@ -46,7 +46,9 @@ def create_model_state(
         if f not in registry:
             continue
         entry = registry[f]
-        (lazy_fns if entry["mode"] == ProcessingMode.LAZY else eager_fns).append(entry["func"])
+        (lazy_fns if entry["mode"] == ProcessingMode.LAZY else eager_fns).append(
+            entry["func"]
+        )
 
     # Filter to the date range + lookback buffer
     lookback_days = _max_feature_lookback(features)
@@ -54,8 +56,7 @@ def create_model_state(
     buffer_start_date = start_date - datetime.timedelta(days=lookback_calendar_days)
 
     lf = (
-        lf
-        .with_columns(pl.col("date").dt.date().alias("date"))
+        lf.with_columns(pl.col("date").dt.date().alias("date"))
         .filter(pl.col("date").is_between(buffer_start_date, end_date))
         .sort(["ticker", "date"])
     )
@@ -73,7 +74,10 @@ def create_model_state(
 
     # Trim warmup and finalize
     model_state = (
-        out.filter((pl.col("date") >= pl.lit(start_date)) & (pl.col("date") <= pl.lit(end_date)))
+        out.filter(
+            (pl.col("date") >= pl.lit(start_date))
+            & (pl.col("date") <= pl.lit(end_date))
+        )
         .sort(["ticker", "date"])
         .rechunk()
     )
@@ -83,13 +87,11 @@ def create_model_state(
     return model_state, prices
 
 
-def _build_model_lazy_input(model_state: DataFrame, tickers: List[str], columns: List[str]) -> pl.LazyFrame:
+def _build_model_lazy_input(
+    model_state: DataFrame, tickers: List[str], columns: List[str]
+) -> pl.LazyFrame:
     cols = ["date", "ticker", *columns]
-    return (
-        model_state.lazy()
-        .filter(pl.col("ticker").is_in(tickers))
-        .select(cols)
-    )
+    return model_state.lazy().filter(pl.col("ticker").is_in(tickers)).select(cols)
 
 
 def _ensure_lazy(obj: Union[pl.DataFrame, pl.LazyFrame]) -> pl.LazyFrame:
@@ -136,11 +138,11 @@ def _max_feature_lookback(features: Sequence[str]) -> int:
 
 
 def orchestrate_model_backtests(
-        model_state: DataFrame,
-        models: List[str],
-        universe: List[str],
-        clamp_bounds: tuple[float, float] = (-1.0, 1.0),
-        registry=MODELS,
+    model_state: DataFrame,
+    models: List[str],
+    universe: List[str],
+    clamp_bounds: tuple[float, float] = (-1.0, 1.0),
+    registry=MODELS,
 ) -> Dict[str, pl.LazyFrame]:
     """
     Run selected models and return per-model LazyFrames padded to the full universe:
@@ -186,14 +188,18 @@ def construct_prices(model_state: DataFrame, universe: List[str]) -> pl.DataFram
     if missing:
         prices = prices.with_columns([pl.lit(None).alias(t) for t in missing])
 
-    prices = prices.select(["date", *universe]).fill_null(strategy="forward").fill_null(strategy="backward")
+    prices = (
+        prices.select(["date", *universe])
+        .fill_null(strategy="forward")
+        .fill_null(strategy="backward")
+    )
     return prices
 
 
 def orchestrate_model_simulations(
-        prices: DataFrame,
-        model_insights: Dict[str, pl.LazyFrame],
-        initial_value: float = 1_000_000.0,
+    prices: DataFrame,
+    model_insights: Dict[str, pl.LazyFrame],
+    initial_value: float = 1_000_000.0,
 ) -> Dict[str, dict]:
     """
     Runs all backtests and returns { model_name: backtest_result }.
@@ -232,41 +238,80 @@ def _enforce_l1_budget(lf: pl.LazyFrame, budget: float = 1.0) -> pl.LazyFrame:
         .otherwise(1.0)
         .alias("_scale")
     )
-    return lf2.with_columns([(pl.col(c) * pl.col("_scale")).alias(c) for c in cols]).drop(["_l1", "_scale"])
+    return lf2.with_columns(
+        [(pl.col(c) * pl.col("_scale")).alias(c) for c in cols]
+    ).drop(["_l1", "_scale"])
 
 
-def orchestrate_portfolio_backtests(
-        model_insights: Dict[str, pl.LazyFrame],
-        backtest_results: Dict[str, dict],
-        universe: List[str],
-        optimizers: List[str],
-        clamp_bounds: tuple[float, float] = (-1.0, 1.0),
-        l1_budget: float = 1.0,
-        registry=OPTIMIZERS,
+def orchestrate_portfolio_aggregation(
+    model_insights: Dict[str, pl.LazyFrame],
+    backtest_results: Dict[str, dict],
+    universe: List[str],
+    aggregators: List[str],
+    clamp_bounds: tuple[float, float] = (-1.0, 1.0),
+    l1_budget: float = 1.0,
+    registry=AGGREGATORS,
 ) -> Dict[str, DataFrame]:
     """
-    Run portfolio optimizers on the model insights and per-model backtests.
-    Returns { optimizer_name: backtest_result }.
+    Aggregate model insights into a single portfolio per aggregator.
+    Returns { aggregator_name: wide DataFrame of weights }.
 
-    All post-processing (padding, float coercion, clamping, L1 budget, price alignment)
-    happens here so optimizers stay minimal.
+    Post-processing (padding, float coercion, clamping, L1 budget) happens here.
     """
     results: Dict[str, DataFrame] = {}
-    for name in optimizers:
+    for name in aggregators:
         if name not in registry:
-            raise KeyError(f"Unknown optimizer: {name}")
+            raise KeyError(f"Unknown aggregator: {name}")
 
-        optimizer_fn = registry[name]["function"]  # Callable[[Dict[str, LF], Dict], LF]
-
-        try:
-            raw = optimizer_fn(model_insights, backtest_results)  # LazyFrame or DataFrame
-        except ValueError as e:
-            logger.error(f"{name} failed: {e}. Falling back to equal weights.")
-            raw = EqualWeightOptimizer()(model_insights, backtest_results)
+        aggregator_fn = registry[name][
+            "function"
+        ]  # Callable[[Dict[str, LF], Dict], LF]
+        raw = aggregator_fn(model_insights, backtest_results)  # LazyFrame or DataFrame
 
         lf = _ensure_lazy(raw)
         lf = _coerce_weights_to_float(lf)
-        lf = _pad_to_universe(lf, universe)  # in theory should do nothing
+        lf = _pad_to_universe(lf, universe)
+        lf = _clamp_weights(lf, *clamp_bounds)
+        lf = _enforce_l1_budget(lf, budget=l1_budget)
+
+        results[name] = lf.collect()
+
+    return results
+
+
+def orchestrate_portfolio_optimizations(
+    prices: DataFrame,
+    aggregated_insights: Dict[str, DataFrame],
+    universe: List[str],
+    optimizers: List[str],
+    clamp_bounds: tuple[float, float] = (-1.0, 1.0),
+    l1_budget: float = 1.0,
+    registry=PORTFOLIO_OPTIMIZERS,
+) -> Dict[str, DataFrame]:
+    """
+    Run asset-level portfolio optimizers on aggregated desired weights.
+    Assumes a single aggregated portfolio input for MVP; uses the first one if multiple.
+    Returns { optimizer_name: wide DataFrame of weights }.
+    """
+    if not aggregated_insights:
+        return {}
+
+    # MVP: use the first aggregated set of weights
+    agg_name, agg_df = next(iter(aggregated_insights.items()))
+
+    results: Dict[str, DataFrame] = {}
+    for name in optimizers:
+        if name not in registry:
+            raise KeyError(f"Unknown portfolio optimizer: {name}")
+
+        optimizer_fn = registry[name][
+            "function"
+        ]  # Callable[[DataFrame, DataFrame, dict|None], LF]
+        raw = optimizer_fn(prices, agg_df, None)  # LazyFrame or DataFrame
+
+        lf = _ensure_lazy(raw)
+        lf = _coerce_weights_to_float(lf)
+        lf = _pad_to_universe(lf, universe)
         lf = _clamp_weights(lf, *clamp_bounds)
         lf = _enforce_l1_budget(lf, budget=l1_budget)
 
@@ -276,9 +321,9 @@ def orchestrate_portfolio_backtests(
 
 
 def orchestrate_portfolio_simulations(
-        prices: DataFrame,
-        portfolio_insights: Dict[str, DataFrame],
-        initial_value: float = 1_000_000.0,
+    prices: DataFrame,
+    portfolio_insights: Dict[str, DataFrame],
+    initial_value: float = 1_000_000.0,
 ):
     backtester = HawkBacktester(initial_value)
     results: Dict[str, dict] = {}
@@ -303,17 +348,19 @@ def orchestrate_portfolio_simulations(
 
 
 def run_full_backtest(
-        universe: list[str],
-        features: list[str],
-        models: list[str],
-        optimizers: list[str],
-        start_date: datetime.date,
-        end_date: datetime.date,
-        initial_value: int = 1_000_000,
-        model_registry: dict = MODELS,
-        optimizer_registry: dict = OPTIMIZERS
+    universe: list[str],
+    features: list[str],
+    models: list[str],
+    aggregators: list[str],
+    portfolio_optimizers: list[str] | None,
+    start_date: datetime.date,
+    end_date: datetime.date,
+    initial_value: int = 1_000_000,
+    model_registry: dict = MODELS,
+    aggregator_registry: dict = AGGREGATORS,
+    portfolio_optimizer_registry: dict = PORTFOLIO_OPTIMIZERS,
 ):
-    """Complete backtest orchestration."""
+    """Complete backtest orchestration (models → aggregation → optimization)."""
 
     # Load data and create model state
     lf = read_data()
@@ -322,7 +369,7 @@ def run_full_backtest(
         features=features,
         start_date=start_date,
         end_date=end_date,
-        universe=universe
+        universe=universe,
     )
 
     # Run models
@@ -330,30 +377,51 @@ def run_full_backtest(
         model_state=model_state,
         models=models,
         universe=universe,
-        registry=model_registry
+        registry=model_registry,
     )
 
     # Run model simulations
     model_simulations = orchestrate_model_simulations(
-        prices=prices,
-        model_insights=model_results,
-        initial_value=initial_value
+        prices=prices, model_insights=model_results, initial_value=initial_value
     )
 
-    # Run portfolio optimization
-    portfolio_results = orchestrate_portfolio_backtests(
+    # Run aggregation
+    aggregated_results = orchestrate_portfolio_aggregation(
         model_insights=model_results,
         backtest_results=model_simulations,
         universe=universe,
-        optimizers=optimizers,
-        registry=optimizer_registry
+        aggregators=aggregators,
+        registry=aggregator_registry,
     )
 
-    # Run portfolio simulations
-    portfolio_simulations = orchestrate_portfolio_simulations(
+    # Simulate aggregated portfolios
+    aggregation_simulations = orchestrate_portfolio_simulations(
         prices=prices,
-        portfolio_insights=portfolio_results,
-        initial_value=initial_value
+        portfolio_insights=aggregated_results,
+        initial_value=initial_value,
     )
 
-    return model_simulations, portfolio_simulations
+    # Optional: run asset-level optimization on top of aggregated weights
+    optimizer_results: Dict[str, DataFrame] = {}
+    optimizer_simulations: Dict[str, dict] = {}
+    if portfolio_optimizers:
+        optimizer_results = orchestrate_portfolio_optimizations(
+            prices=prices,
+            aggregated_insights=aggregated_results,
+            universe=universe,
+            optimizers=portfolio_optimizers,
+            registry=portfolio_optimizer_registry,
+        )
+        optimizer_simulations = orchestrate_portfolio_simulations(
+            prices=prices,
+            portfolio_insights=optimizer_results,
+            initial_value=initial_value,
+        )
+
+    return {
+        "model_simulations": model_simulations,
+        "aggregation_results": aggregated_results,
+        "aggregation_simulations": aggregation_simulations,
+        "optimizer_results": optimizer_results,
+        "optimizer_simulations": optimizer_simulations,
+    }

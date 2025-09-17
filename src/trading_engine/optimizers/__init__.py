@@ -1,1 +1,1 @@
-from trading_engine.optimizers.registry import OPTIMIZERS
+from trading_engine.optimizers.registry import PORTFOLIO_OPTIMIZERS

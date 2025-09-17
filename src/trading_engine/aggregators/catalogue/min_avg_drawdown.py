@@ -7,23 +7,16 @@ from polars import LazyFrame
 _EPS = 1e-9
 
 
-def MinAvgDrawdownOptimizer(window_days: int = 90) -> Callable[[Dict[str, LazyFrame], Dict], LazyFrame]:
+def MinAvgDrawdownAggregator(
+    window_days: int = 90,
+) -> Callable[[Dict[str, LazyFrame], Dict], LazyFrame]:
     """
     Build a portfolio by weighting model insights inversely to their average drawdown
     over the last `window_days`. Models with lower recent drawdown get higher weight.
 
-    Inputs:
-      model_insights: { model_name: LazyFrame(["date", ...tickers...]) }  (wide)
-      backtest_results: {
-         model_name: {
-            "backtest_metrics": pl.DataFrame with columns ["date", "drawdown", ...],
-            ... other keys ...
-         }, ...
-      }
-
-    Output (RAW, wide):
-      LazyFrame(["date", ...all tickers seen in inputs...]).
-      No padding/clamping/L1 scaling here (centralized in orchestrator).
+    :param model_insights: { model_name: LazyFrame(["date", ...tickers...]) } (wide)
+    :param backtest_results: mapping with keys per model; may contain 'backtest_results' DataFrame
+    :return: LazyFrame(["date", ...all tickers seen in inputs...]) without padding/clamping/L1 scaling.
     """
 
     def _avg_drawdown_recent(metrics_df: pl.DataFrame) -> float:
@@ -49,7 +42,7 @@ def MinAvgDrawdownOptimizer(window_days: int = 90) -> Callable[[Dict[str, LazyFr
         # Drawdown magnitude (use abs in case stored negative)
         win = metrics_df.filter(pl.col("date") >= pl.lit(start))
         if win.is_empty():
-            win = metrics_df  # fallback to full history
+            win = metrics_df
 
         val = win.select(pl.col("drawdown").abs().mean()).item()
         if val is None or not (val == val):  # NaN check
@@ -80,7 +73,8 @@ def MinAvgDrawdownOptimizer(window_days: int = 90) -> Callable[[Dict[str, LazyFr
                 avg_dd = _avg_drawdown_recent(metrics)
             else:
                 try:
-                    import pandas as pd  # optional dependency
+                    import pandas as pd
+
                     if isinstance(metrics, pd.DataFrame):
                         avg_dd = _avg_drawdown_recent(pl.from_pandas(metrics))
                     else:
@@ -103,13 +97,15 @@ def MinAvgDrawdownOptimizer(window_days: int = 90) -> Callable[[Dict[str, LazyFr
         for mname, lf in model_insights.items():
             coef = coefs.get(mname, 0.0)
 
-            # Multiply all non-'date' columns by coef (robust across Polars versions)
+            # Multiply all non-'date' columns by coef
             names = lf.collect_schema().names()
             wcols = [c for c in names if c != "date"]
             if not wcols:
                 continue
 
-            scaled = lf.with_columns([(pl.col(c) * pl.lit(coef)).alias(c) for c in wcols])
+            scaled = lf.with_columns(
+                [(pl.col(c) * pl.lit(coef)).alias(c) for c in wcols]
+            )
 
             long = scaled.melt(id_vars="date", variable_name="ticker", value_name="w")
             longs.append(long)
@@ -118,14 +114,17 @@ def MinAvgDrawdownOptimizer(window_days: int = 90) -> Callable[[Dict[str, LazyFr
             return pl.DataFrame({"date": []}).lazy()
 
         # 3) Sum across models in long space, pivot to wide
-        combined_long_lf = pl.concat(longs, how="vertical").group_by(["date", "ticker"]).agg(
-            pl.col("w").sum().alias("w")
+        combined_long_lf = (
+            pl.concat(longs, how="vertical")
+            .group_by(["date", "ticker"])
+            .agg(pl.col("w").sum().alias("w"))
         )
 
         combined_wide_df = (
-            combined_long_lf
-            .collect(engine="streaming")  # pivot is a DataFrame op in many Polars versions
-            .pivot(values="w", index="date", columns="ticker", aggregate_function="first")
+            combined_long_lf.collect(engine="streaming")
+            .pivot(
+                values="w", index="date", columns="ticker", aggregate_function="first"
+            )
             .sort("date")
         )
         return combined_wide_df.lazy()
