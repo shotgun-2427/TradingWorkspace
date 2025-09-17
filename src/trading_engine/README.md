@@ -8,20 +8,21 @@ Raw Data → Model State → Models → Aggregation → (optional) Optimization 
 ```
 
 ```mermaid
-flowchart TD
-    A[Raw Data (Parquet/GCS)] --> B[Create Model State]
-    B --> C1[Model A]
-    B --> C2[Model B]
-    B --> C3[Model N]
-    C1 & C2 & C3 --> D[Aggregation (model-wise)]
-    D -->|optional| E[Optimization (asset-level)]
-    subgraph Risk
-      R[Risk Model Σ]
-    end
-    R -. provides Σ_assets .-> E
-    R -. provides Σ_models .-> D
-    E --> F[Simulation / Outputs]
-    D --> F
+graph TD;
+    A[Raw Data] -- prices --> B[Create Model State];
+    B -- model state --> C1[Model A];
+    B -- model state --> C2[Model B];
+    B -- model state --> C3[Model N];
+    C1 -- weights --> D[Aggregation];
+    C2 -- weights --> D;
+    C3 -- weights --> D;
+    D -- desired weights --> E[Optimization];
+    subgraph Risk;
+      R[Risk Model];
+    end;
+    R -. cov_assets .-> E;
+    R -. cov_models .-> D;
+    E -- final weights --> F[Simulation and Outputs];
 ```
 
 - **Data → Model State**
