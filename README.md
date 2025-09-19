@@ -82,3 +82,9 @@ Run a notebook cell with this line of code.
 import os
 os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = 'abs_path_to_your_service_account/service_account.json' # CHANGE THIS PATH
 ```
+
+
+## Mosek Opt Liscense
+```bash
+export MOSEKLM_LICENSE_FILE=/path_to_lic_file/mosek.lic
+```

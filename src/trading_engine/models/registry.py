@@ -1,5 +1,7 @@
 from trading_engine.models.catalogue.amma import AMMA
-from trading_engine.models.catalogue.inverse_momentum_mean_reversion import InverseMomentumMeanReversionModel
+from trading_engine.models.catalogue.inverse_momentum_mean_reversion import (
+    InverseMomentumMeanReversionModel,
+)
 from trading_engine.models.catalogue.momentum import MomentumModel
 from trading_engine.models.catalogue.natr_mean_reversion import NATRMeanReversionModel
 
@@ -58,85 +60,81 @@ MODELS = {
         "tickers": ["GLD-US"],
         "columns": ["close_momentum_10"],
         "function": InverseMomentumMeanReversionModel(
-            tickers=["GLD-US"],
-            momentum_column="close_momentum_10",
-            threshold=0.1
-        )
+            tickers=["GLD-US"], momentum_column="close_momentum_10", threshold=0.1
+        ),
     },
     "etf_mr_gld_60_0.1": {
         "tickers": ["GLD-US"],
         "columns": ["close_momentum_60"],
         "function": InverseMomentumMeanReversionModel(
-            tickers=["GLD-US"],
-            momentum_column="close_momentum_60",
-            threshold=0.1
-        )
+            tickers=["GLD-US"], momentum_column="close_momentum_60", threshold=0.1
+        ),
     },
     "etf_mr_ixn_10_0.1": {
         "tickers": ["IXN-US"],
         "columns": ["close_momentum_10"],
         "function": InverseMomentumMeanReversionModel(
-            tickers=["IXN-US"],
-            momentum_column="close_momentum_10",
-            threshold=0.1
-        )
+            tickers=["IXN-US"], momentum_column="close_momentum_10", threshold=0.1
+        ),
     },
     "etf_mr_jxi_60_0.001": {
         "tickers": ["JXI-US"],
         "columns": ["close_momentum_60"],
         "function": InverseMomentumMeanReversionModel(
-            tickers=["JXI-US"],
-            momentum_column="close_momentum_60",
-            threshold=0.001
-        )
+            tickers=["JXI-US"], momentum_column="close_momentum_60", threshold=0.001
+        ),
     },
     "etf_mr_jxi_240_0.05": {
         "tickers": ["JXI-US"],
         "columns": ["close_momentum_240"],
         "function": InverseMomentumMeanReversionModel(
-            tickers=["JXI-US"],
-            momentum_column="close_momentum_240",
-            threshold=0.05
-        )
+            tickers=["JXI-US"], momentum_column="close_momentum_240", threshold=0.05
+        ),
     },
     "etf_mr_jxi_240_0.01": {
         "tickers": ["JXI-US"],
         "columns": ["close_momentum_240"],
         "function": InverseMomentumMeanReversionModel(
-            tickers=["JXI-US"],
-            momentum_column="close_momentum_240",
-            threshold=0.01
-        )
+            tickers=["JXI-US"], momentum_column="close_momentum_240", threshold=0.01
+        ),
     },
     "etf_mr_jxi_240_0.001": {
         "tickers": ["JXI-US"],
         "columns": ["close_momentum_240"],
         "function": InverseMomentumMeanReversionModel(
-            tickers=["JXI-US"],
-            momentum_column="close_momentum_240",
-            threshold=0.001
-        )
+            tickers=["JXI-US"], momentum_column="close_momentum_240", threshold=0.001
+        ),
     },
     "etf_mr_jxi_240_0.005": {
         "tickers": ["JXI-US"],
         "columns": ["close_momentum_240"],
         "function": InverseMomentumMeanReversionModel(
-            tickers=["JXI-US"],
-            momentum_column="close_momentum_240",
-            threshold=0.005
-        )
+            tickers=["JXI-US"], momentum_column="close_momentum_240", threshold=0.005
+        ),
     },
     "natr_7_14": {
         "tickers": ["IXN-US"],
-        "columns": ["adjusted_close_1d", "natr_7", "natr_14", "close_momentum_1", "close_momentum_14",
-                    "close_momentum_32", "close_momentum_64"],
-        "function": NATRMeanReversionModel(trade_ticker="IXN-US")
+        "columns": [
+            "adjusted_close_1d",
+            "natr_7",
+            "natr_14",
+            "close_momentum_1",
+            "close_momentum_14",
+            "close_momentum_32",
+            "close_momentum_64",
+        ],
+        "function": NATRMeanReversionModel(trade_ticker="IXN-US"),
     },
     "TLT_AMMA": {
         "tickers": ["TLT-US"],
         "columns": [
-            "close_momentum_10", "close_momentum_20", "close_momentum_30",
-            "close_momentum_60", "close_momentum_90", "close_momentum_120", "close_momentum_240"
+            "close_momentum_10",
+            "close_momentum_20",
+            "close_momentum_30",
+            "close_momentum_60",
+            "close_momentum_90",
+            "close_momentum_120",
+            "close_momentum_240",
         ],
         "function": AMMA(
             ticker="TLT-US",
@@ -147,15 +145,20 @@ MODELS = {
                 60: 0.252,
                 90: 0,
                 120: 0.195,
-                240: 0.187
+                240: 0.187,
             },
         ),
     },
     "IEI_AMMA": {
         "tickers": ["IEI-US"],
         "columns": [
-            "close_momentum_10", "close_momentum_20", "close_momentum_30",
-            "close_momentum_60", "close_momentum_90", "close_momentum_120", "close_momentum_240"
+            "close_momentum_10",
+            "close_momentum_20",
+            "close_momentum_30",
+            "close_momentum_60",
+            "close_momentum_90",
+            "close_momentum_120",
+            "close_momentum_240",
         ],
         "function": AMMA(
             ticker="IEI-US",
@@ -166,15 +169,20 @@ MODELS = {
                 60: 0.222,
                 90: 0,
                 120: 0.236,
-                240: 0.226
+                240: 0.226,
             },
         ),
     },
     "SHY_AMMA": {
         "tickers": ["SHY-US"],
         "columns": [
-            "close_momentum_10", "close_momentum_20", "close_momentum_30",
-            "close_momentum_60", "close_momentum_90", "close_momentum_120", "close_momentum_240"
+            "close_momentum_10",
+            "close_momentum_20",
+            "close_momentum_30",
+            "close_momentum_60",
+            "close_momentum_90",
+            "close_momentum_120",
+            "close_momentum_240",
         ],
         "function": AMMA(
             ticker="SHY-US",
@@ -185,15 +193,20 @@ MODELS = {
                 60: 0,
                 90: 0,
                 120: 0.2304,
-                240: 0.6169
+                240: 0.6169,
             },
         ),
     },
     "BIL_AMMA": {
         "tickers": ["BIL-US"],
         "columns": [
-            "close_momentum_10", "close_momentum_20", "close_momentum_30",
-            "close_momentum_60", "close_momentum_90", "close_momentum_120", "close_momentum_240"
+            "close_momentum_10",
+            "close_momentum_20",
+            "close_momentum_30",
+            "close_momentum_60",
+            "close_momentum_90",
+            "close_momentum_120",
+            "close_momentum_240",
         ],
         "function": AMMA(
             ticker="BIL-US",
@@ -204,15 +217,20 @@ MODELS = {
                 60: 0.2,
                 90: 0,
                 120: 0.3,
-                240: 0.4
+                240: 0.4,
             },
         ),
     },
     "SLV_AMMA": {
         "tickers": ["SLV-US"],
         "columns": [
-            "close_momentum_10", "close_momentum_20", "close_momentum_30",
-            "close_momentum_60", "close_momentum_90", "close_momentum_120", "close_momentum_240"
+            "close_momentum_10",
+            "close_momentum_20",
+            "close_momentum_30",
+            "close_momentum_60",
+            "close_momentum_90",
+            "close_momentum_120",
+            "close_momentum_240",
         ],
         "function": AMMA(
             ticker="SLV-US",
@@ -223,15 +241,20 @@ MODELS = {
                 60: 0,
                 90: 0,
                 120: 0,
-                240: 0.34
+                240: 0.34,
             },
         ),
     },
     "GLD_AMMA": {
         "tickers": ["GLD-US"],
         "columns": [
-            "close_momentum_10", "close_momentum_20", "close_momentum_30",
-            "close_momentum_60", "close_momentum_90", "close_momentum_120", "close_momentum_240"
+            "close_momentum_10",
+            "close_momentum_20",
+            "close_momentum_30",
+            "close_momentum_60",
+            "close_momentum_90",
+            "close_momentum_120",
+            "close_momentum_240",
         ],
         "function": AMMA(
             ticker="GLD-US",
@@ -242,34 +265,36 @@ MODELS = {
                 60: 0.2,
                 90: 0.35,
                 120: 0.4,
-                240: 0
+                240: 0,
             },
         ),
     },
     "USO_AMMA": {
         "tickers": ["USO-US"],
         "columns": [
-            "close_momentum_10", "close_momentum_20", "close_momentum_30",
-            "close_momentum_60", "close_momentum_90", "close_momentum_120", "close_momentum_240"
+            "close_momentum_10",
+            "close_momentum_20",
+            "close_momentum_30",
+            "close_momentum_60",
+            "close_momentum_90",
+            "close_momentum_120",
+            "close_momentum_240",
         ],
         "function": AMMA(
             ticker="USO-US",
-            momentum_weights={
-                10: 0,
-                20: 0.61,
-                30: 0,
-                60: 0.39,
-                90: 0,
-                120: 0,
-                240: 0
-            },
+            momentum_weights={10: 0, 20: 0.61, 30: 0, 60: 0.39, 90: 0, 120: 0, 240: 0},
         ),
     },
     "UNG_AMMA": {
         "tickers": ["UNG-US"],
         "columns": [
-            "close_momentum_10", "close_momentum_20", "close_momentum_30",
-            "close_momentum_60", "close_momentum_90", "close_momentum_120", "close_momentum_240"
+            "close_momentum_10",
+            "close_momentum_20",
+            "close_momentum_30",
+            "close_momentum_60",
+            "close_momentum_90",
+            "close_momentum_120",
+            "close_momentum_240",
         ],
         "function": AMMA(
             ticker="UNG-US",
@@ -280,15 +305,20 @@ MODELS = {
                 60: 0,
                 90: 0,
                 120: 0.57,
-                240: 0.28
+                240: 0.28,
             },
         ),
     },
     "SPY_AMMA": {
         "tickers": ["SPY-US"],
         "columns": [
-            "close_momentum_10", "close_momentum_20", "close_momentum_30",
-            "close_momentum_60", "close_momentum_90", "close_momentum_120", "close_momentum_240"
+            "close_momentum_10",
+            "close_momentum_20",
+            "close_momentum_30",
+            "close_momentum_60",
+            "close_momentum_90",
+            "close_momentum_120",
+            "close_momentum_240",
         ],
         "function": AMMA(
             ticker="SPY-US",
@@ -299,15 +329,20 @@ MODELS = {
                 60: 0.98888462,
                 90: 0,
                 120: 0,
-                240: 0.01111538
+                240: 0.01111538,
             },
         ),
     },
     "EWJ_AMMA": {
         "tickers": ["EWJ-US"],
         "columns": [
-            "close_momentum_10", "close_momentum_20", "close_momentum_30",
-            "close_momentum_60", "close_momentum_90", "close_momentum_120", "close_momentum_240"
+            "close_momentum_10",
+            "close_momentum_20",
+            "close_momentum_30",
+            "close_momentum_60",
+            "close_momentum_90",
+            "close_momentum_120",
+            "close_momentum_240",
         ],
         "function": AMMA(
             ticker="EWJ-US",
@@ -318,15 +353,20 @@ MODELS = {
                 60: 0.1527,
                 90: 0,
                 120: 0,
-                240: 0.1567
+                240: 0.1567,
             },
         ),
     },
     "INDA_AMMA": {
         "tickers": ["INDA-US"],
         "columns": [
-            "close_momentum_10", "close_momentum_20", "close_momentum_30",
-            "close_momentum_60", "close_momentum_90", "close_momentum_120", "close_momentum_240"
+            "close_momentum_10",
+            "close_momentum_20",
+            "close_momentum_30",
+            "close_momentum_60",
+            "close_momentum_90",
+            "close_momentum_120",
+            "close_momentum_240",
         ],
         "function": AMMA(
             ticker="INDA-US",
@@ -337,15 +377,20 @@ MODELS = {
                 60: 0,
                 90: 0,
                 120: 0,
-                240: 0.1
+                240: 0.1,
             },
         ),
     },
     "MCHI_AMMA": {
         "tickers": ["MCHI-US"],
         "columns": [
-            "close_momentum_10", "close_momentum_20", "close_momentum_30",
-            "close_momentum_60", "close_momentum_90", "close_momentum_120", "close_momentum_240"
+            "close_momentum_10",
+            "close_momentum_20",
+            "close_momentum_30",
+            "close_momentum_60",
+            "close_momentum_90",
+            "close_momentum_120",
+            "close_momentum_240",
         ],
         "function": AMMA(
             ticker="MCHI-US",
@@ -356,15 +401,20 @@ MODELS = {
                 60: 0.35,
                 90: 0,
                 120: 0.05,
-                240: 0.25
+                240: 0.25,
             },
         ),
     },
     "EZU_AMMA": {
         "tickers": ["EZU-US"],
         "columns": [
-            "close_momentum_10", "close_momentum_20", "close_momentum_30",
-            "close_momentum_60", "close_momentum_90", "close_momentum_120", "close_momentum_240"
+            "close_momentum_10",
+            "close_momentum_20",
+            "close_momentum_30",
+            "close_momentum_60",
+            "close_momentum_90",
+            "close_momentum_120",
+            "close_momentum_240",
         ],
         "function": AMMA(
             ticker="EZU-US",
@@ -375,34 +425,36 @@ MODELS = {
                 60: 0,
                 90: 0,
                 120: 0.9668,
-                240: 0
+                240: 0,
             },
         ),
     },
     "VIXY_AMMA": {
         "tickers": ["VIXY-US"],
         "columns": [
-            "close_momentum_10", "close_momentum_20", "close_momentum_30",
-            "close_momentum_60", "close_momentum_90", "close_momentum_120", "close_momentum_240"
+            "close_momentum_10",
+            "close_momentum_20",
+            "close_momentum_30",
+            "close_momentum_60",
+            "close_momentum_90",
+            "close_momentum_120",
+            "close_momentum_240",
         ],
         "function": AMMA(
             ticker="VIXY-US",
-            momentum_weights={
-                10: 0,
-                20: 0,
-                30: 0,
-                60: 1,
-                90: 0,
-                120: 0,
-                240: 0
-            },
+            momentum_weights={10: 0, 20: 0, 30: 0, 60: 1, 90: 0, 120: 0, 240: 0},
         ),
     },
     "IBIT_AMMA": {
         "tickers": ["IBIT-US"],
         "columns": [
-            "close_momentum_10", "close_momentum_20", "close_momentum_30",
-            "close_momentum_60", "close_momentum_90", "close_momentum_120", "close_momentum_240"
+            "close_momentum_10",
+            "close_momentum_20",
+            "close_momentum_30",
+            "close_momentum_60",
+            "close_momentum_90",
+            "close_momentum_120",
+            "close_momentum_240",
         ],
         "function": AMMA(
             ticker="IBIT-US",
@@ -412,16 +464,21 @@ MODELS = {
                 30: 0,
                 60: 0.232,
                 90: 0,
-                120: .406,
-                240: .045
+                120: 0.406,
+                240: 0.045,
             },
         ),
     },
     "ETHA_AMMA": {
         "tickers": ["ETHA-US"],
         "columns": [
-            "close_momentum_10", "close_momentum_20", "close_momentum_30",
-            "close_momentum_60", "close_momentum_90", "close_momentum_120", "close_momentum_240"
+            "close_momentum_10",
+            "close_momentum_20",
+            "close_momentum_30",
+            "close_momentum_60",
+            "close_momentum_90",
+            "close_momentum_120",
+            "close_momentum_240",
         ],
         "function": AMMA(
             ticker="ETHA-US",
@@ -431,9 +488,9 @@ MODELS = {
                 30: 0,
                 60: 0.062,
                 90: 0,
-                120: .062,
-                240: .062
+                120: 0.062,
+                240: 0.062,
             },
         ),
-    }
+    },
 }

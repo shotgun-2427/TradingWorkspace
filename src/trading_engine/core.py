@@ -82,6 +82,21 @@ def create_model_state(
         .rechunk()
     )
 
+    # For assets with sparse history, fill only close prices to avoid gaps
+    # Forward-fill within ticker, then backfill earliest with first observed price
+    if "adjusted_close_1d" in model_state.columns:
+        model_state = model_state.with_columns(
+            pl.col("adjusted_close_1d")
+            .forward_fill()
+            .over("ticker")
+            .alias("adjusted_close_1d")
+        ).with_columns(
+            pl.col("adjusted_close_1d")
+            .backward_fill()
+            .over("ticker")
+            .alias("adjusted_close_1d")
+        )
+
     prices = construct_prices(model_state, universe)
 
     return model_state, prices
@@ -222,6 +237,11 @@ def orchestrate_model_simulations(
                 weights = weights.with_columns([pl.lit(0.0).alias(c) for c in missing])
             weights = weights.select(["date", *price_cols]).fill_null(0.0)
 
+        # Align to full price date range (fill missing dates with 0.0 weights)
+        weights = (
+            prices.select("date").join(weights, on="date", how="left").fill_null(0.0)
+        )
+
         results[name] = backtester.run(prices, weights)
 
     return results
@@ -341,6 +361,11 @@ def orchestrate_portfolio_simulations(
             if missing:
                 weights = weights.with_columns([pl.lit(0.0).alias(c) for c in missing])
             weights = weights.select(["date", *price_cols]).fill_null(0.0)
+
+        # Align to full price date range (fill missing dates with 0.0 weights)
+        weights = (
+            prices.select("date").join(weights, on="date", how="left").fill_null(0.0)
+        )
 
         results[name] = backtester.run(prices, weights)
 
