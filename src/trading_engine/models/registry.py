@@ -1,3 +1,4 @@
+from trading_engine.models.catalogue.amma import AMMA
 from trading_engine.models.catalogue.inverse_momentum_mean_reversion import InverseMomentumMeanReversionModel
 from trading_engine.models.catalogue.momentum import MomentumModel
 from trading_engine.models.catalogue.natr_mean_reversion import NATRMeanReversionModel
@@ -130,5 +131,271 @@ MODELS = {
         "columns": ["adjusted_close_1d", "natr_7", "natr_14", "close_momentum_1", "close_momentum_14",
                     "close_momentum_32", "close_momentum_64"],
         "function": NATRMeanReversionModel(trade_ticker="IXN-US")
+    },
+    "TLT_AMMA": {
+        "tickers": ["TLT-US"],
+        "columns": [
+            "close_momentum_10", "close_momentum_20", "close_momentum_30",
+            "close_momentum_60", "close_momentum_90", "close_momentum_120", "close_momentum_240"
+        ],
+        "function": AMMA(
+            ticker="TLT-US",
+            momentum_weights={
+                10: 0.145,
+                20: 0.221,
+                30: 0,
+                60: 0.252,
+                90: 0,
+                120: 0.195,
+                240: 0.187
+            },
+        ),
+    },
+    "IEI_AMMA": {
+        "tickers": ["IEI-US"],
+        "columns": [
+            "close_momentum_10", "close_momentum_20", "close_momentum_30",
+            "close_momentum_60", "close_momentum_90", "close_momentum_120", "close_momentum_240"
+        ],
+        "function": AMMA(
+            ticker="IEI-US",
+            momentum_weights={
+                10: 0.14,
+                20: 0.176,
+                30: 0,
+                60: 0.222,
+                90: 0,
+                120: 0.236,
+                240: 0.226
+            },
+        ),
+    },
+    "SHY_AMMA": {
+        "tickers": ["SHY-US"],
+        "columns": [
+            "close_momentum_10", "close_momentum_20", "close_momentum_30",
+            "close_momentum_60", "close_momentum_90", "close_momentum_120", "close_momentum_240"
+        ],
+        "function": AMMA(
+            ticker="SHY-US",
+            momentum_weights={
+                10: 0,
+                20: 0.1527,
+                30: 0,
+                60: 0,
+                90: 0,
+                120: 0.2304,
+                240: 0.6169
+            },
+        ),
+    },
+    "BIL_AMMA": {
+        "tickers": ["BIL-US"],
+        "columns": [
+            "close_momentum_10", "close_momentum_20", "close_momentum_30",
+            "close_momentum_60", "close_momentum_90", "close_momentum_120", "close_momentum_240"
+        ],
+        "function": AMMA(
+            ticker="BIL-US",
+            momentum_weights={
+                10: 0,
+                20: 0.1,
+                30: 0,
+                60: 0.2,
+                90: 0,
+                120: 0.3,
+                240: 0.4
+            },
+        ),
+    },
+    "SLV_AMMA": {
+        "tickers": ["SLV-US"],
+        "columns": [
+            "close_momentum_10", "close_momentum_20", "close_momentum_30",
+            "close_momentum_60", "close_momentum_90", "close_momentum_120", "close_momentum_240"
+        ],
+        "function": AMMA(
+            ticker="SLV-US",
+            momentum_weights={
+                10: 0.33,
+                20: 0,
+                30: 0.33,
+                60: 0,
+                90: 0,
+                120: 0,
+                240: 0.34
+            },
+        ),
+    },
+    "GLD_AMMA": {
+        "tickers": ["GLD-US"],
+        "columns": [
+            "close_momentum_10", "close_momentum_20", "close_momentum_30",
+            "close_momentum_60", "close_momentum_90", "close_momentum_120", "close_momentum_240"
+        ],
+        "function": AMMA(
+            ticker="GLD-US",
+            momentum_weights={
+                10: 0.15,
+                20: 0,
+                30: 0,
+                60: 0.2,
+                90: 0.35,
+                120: 0.4,
+                240: 0
+            },
+        ),
+    },
+    "USO_AMMA": {
+        "tickers": ["USO-US"],
+        "columns": [
+            "close_momentum_10", "close_momentum_20", "close_momentum_30",
+            "close_momentum_60", "close_momentum_90", "close_momentum_120", "close_momentum_240"
+        ],
+        "function": AMMA(
+            ticker="USO-US",
+            momentum_weights={
+                10: 0,
+                20: 0.64,
+                30: 0,
+                60: 0.36,
+                90: 0,
+                120: 0,
+                240: 0
+            },
+        ),
+    },
+    "UNG_AMMA": {
+        "tickers": ["UNG-US"],
+        "columns": [
+            "close_momentum_10", "close_momentum_20", "close_momentum_30",
+            "close_momentum_60", "close_momentum_90", "close_momentum_120", "close_momentum_240"
+        ],
+        "function": AMMA(
+            ticker="UNG-US",
+            momentum_weights={
+                10: 0,
+                20: 0,
+                30: 0,
+                60: 0,
+                90: 0,
+                120: 1,
+                240: 0
+            },
+        ),
+    },
+    "SPY_AMMA": {
+        "tickers": ["SPY-US"],
+        "columns": [
+            "close_momentum_10", "close_momentum_20", "close_momentum_30",
+            "close_momentum_60", "close_momentum_90", "close_momentum_120", "close_momentum_240"
+        ],
+        "function": AMMA(
+            ticker="SPY-US",
+            momentum_weights={
+                10: 0,
+                20: 0,
+                30: 0,
+                60: 0.98888462,
+                90: 0,
+                120: 0,
+                240: 0.01111538
+            },
+        ),
+    },
+    "EWJ_AMMA": {
+        "tickers": ["EWJ-US"],
+        "columns": [
+            "close_momentum_10", "close_momentum_20", "close_momentum_30",
+            "close_momentum_60", "close_momentum_90", "close_momentum_120", "close_momentum_240"
+        ],
+        "function": AMMA(
+            ticker="EWJ-US",
+            momentum_weights={
+                10: 0,
+                20: 0.6906,
+                30: 0,
+                60: 0.1527,
+                90: 0,
+                120: 0,
+                240: 0.1567
+            },
+        ),
+    },
+    "INDA_AMMA": {
+        "tickers": ["INDA-US"],
+        "columns": [
+            "close_momentum_10", "close_momentum_20", "close_momentum_30",
+            "close_momentum_60", "close_momentum_90", "close_momentum_120", "close_momentum_240"
+        ],
+        "function": AMMA(
+            ticker="INDA-US",
+            momentum_weights={
+                10: 0.45,
+                20: 0.45,
+                30: 0,
+                60: 0,
+                90: 0,
+                120: 0,
+                240: 0.1
+            },
+        ),
+    },
+    "MCHI_AMMA": {
+        "tickers": ["MCHI-US"],
+        "columns": [
+            "close_momentum_10", "close_momentum_20", "close_momentum_30",
+            "close_momentum_60", "close_momentum_90", "close_momentum_120", "close_momentum_240"
+        ],
+        "function": AMMA(
+            ticker="MCHI-US",
+            momentum_weights={
+                10: 0,
+                20: 0.35,
+                30: 0,
+                60: 0.35,
+                90: 0,
+                120: 0.05,
+                240: 0.25
+            },
+        ),
+    },
+    "EZU_AMMA": {
+        "tickers": ["EZU-US"],
+        "columns": [
+            "close_momentum_10", "close_momentum_20", "close_momentum_30",
+            "close_momentum_60", "close_momentum_90", "close_momentum_120", "close_momentum_240"
+        ],
+        "function": AMMA(
+            ticker="EZU-US",
+            momentum_weights={
+                10: 0,
+                20: 0.0332,
+                30: 0,
+                60: 0,
+                90: 0,
+                120: 0.9668,
+                240: 0
+            },
+        ),
+    },
+    "VIXY_AMMA": {
+        "tickers": ["VIXY-US"],
+        "columns": [
+            "close_momentum_10", "close_momentum_20", "close_momentum_30",
+            "close_momentum_60", "close_momentum_90", "close_momentum_120", "close_momentum_240"
+        ],
+        "function": AMMA(
+            ticker="VIXY-US",
+            momentum_weights={
+                10: 0,
+                20: 0,
+                30: 0,
+                60: 1,
+                90: 0,
+                120: 0,
+                240: 0
+            },
+        ),
     }
 }
