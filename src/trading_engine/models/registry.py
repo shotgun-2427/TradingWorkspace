@@ -397,5 +397,43 @@ MODELS = {
                 240: 0
             },
         ),
+    },
+    "IBIT_AMMA": {
+        "tickers": ["IBIT-US"],
+        "columns": [
+            "close_momentum_10", "close_momentum_20", "close_momentum_30",
+            "close_momentum_60", "close_momentum_90", "close_momentum_120", "close_momentum_240"
+        ],
+        "function": AMMA(
+            ticker="IBIT-US",
+            momentum_weights={
+                10: 0.045,
+                20: 0.271,
+                30: 0,
+                60: 0.232,
+                90: 0,
+                120: .406,
+                240: .045
+            },
+        ),
+    },
+    "ETHA_AMMA": {
+        "tickers": ["ETHA-US"],
+        "columns": [
+            "close_momentum_10", "close_momentum_20", "close_momentum_30",
+            "close_momentum_60", "close_momentum_90", "close_momentum_120", "close_momentum_240"
+        ],
+        "function": AMMA(
+            ticker="ETHA-US",
+            momentum_weights={
+                10: 0.062,
+                20: 0.75,
+                30: 0,
+                60: 0.062,
+                90: 0,
+                120: .062,
+                240: .062
+            },
+        ),
     }
 }
