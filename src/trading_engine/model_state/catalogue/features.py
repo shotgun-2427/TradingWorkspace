@@ -1,3 +1,4 @@
+from polars import LazyFrame
 from typing import Callable
 
 import polars as pl
@@ -87,81 +88,103 @@ def natr(
     return transform
 
 
-def tip_regime_signal(
-    source_col: str,
+def regime_signal_from_ticker(
+    regime_ticker: str,
+    price_col: str,
     dest_col: str,
-    trend_window: int = 252,
-    confirm_days: int = 40,
+    trend_window: int,
+    confirm_days: int,
+    direction: str,
 ) -> Callable[[LazyFrame], LazyFrame]:
     """
-    Generate TIP regime binary signal for inflation-trend filtering.
+    Compute a binary regime signal based on the price history of a specific ticker (e.g. TIP-US),
+    and join that signal back to all rows in the model state by date.
 
     Logic:
-      - Compute long-term % change in TIP price over `trend_window`.
-      - If trend <= 0 ⇒ inflation cooling ⇒ ALLOW (1)
-      - If trend > 0 ⇒ inflation rising ⇒ AVOID (0)
+      - Filter rows where ticker == regime_ticker.
+      - Compute % change over `trend_window`.
+      - direction='down_is_good' → signal=1 if trend<=0 else 0  (TIP logic)
+      - direction='up_is_good'   → signal=1 if trend>=0 else 0
       - Apply confirmation smoothing over `confirm_days`.
-      - Shift by 1 to remove lookahead bias.
-      - If insufficient data for either step ⇒ default to 0.
+      - Shift by 1 day to remove lookahead.
+      - Default signal=0 when insufficient data.
+      - Join the resulting signal back to *all* tickers by date.
 
     Parameters
     ----------
-    source_col : str
-        Column name for TIP ETF adjusted close (e.g. 'tips_close_1d').
+    regime_ticker : str
+        The ticker whose price defines the regime (e.g. 'TIP-US').
+    price_col : str
+        Column with adjusted close or source prices (e.g. 'adjusted_close_1d').
     dest_col : str
-        Destination column for computed binary signal.
+        Column name to store the computed signal (e.g. 'tip_signal').
     trend_window : int
-        Days for long-term trend.
+        Lookback window for long-term percent change.
     confirm_days : int
-        Days for confirmation smoothing.
+        Window for regime persistence confirmation.
+    direction : {'down_is_good', 'up_is_good'}
+        Determines which direction indicates a favorable regime.
 
     Returns
     -------
     Callable[[LazyFrame], LazyFrame]
-        Transformation that adds a new column with TIP regime signal.
+        Transformation that adds the regime column to the model state.
     """
+    if direction not in {"down_is_good", "up_is_good"}:
+        raise ValueError("direction must be 'down_is_good' or 'up_is_good'")
+
     def transform(df: LazyFrame) -> LazyFrame:
-        # Compute long-term percent change (trend)
-        df = df.with_columns(
-            (
-                (pl.col(source_col) / pl.col(source_col).shift(trend_window) - 1.0)
-                .alias("tip_trend")
-            )
+        # --- Step 1: Extract TIP (or other regime) rows only ---
+        regime_df = df.filter(pl.col("ticker") == regime_ticker).select(
+            ["date", price_col])
+
+        # --- Step 2: Compute long-term percent change trend ---
+        regime_df = regime_df.with_columns(
+            ((pl.col(price_col) / pl.col(price_col).shift(trend_window)) - 1.0)
+            .alias("regime_trend")
         )
 
-        # Base regime: 1 if trend <= 0 (inflation cooling), else 0
-        df = df.with_columns(
-            (pl.when(pl.col("tip_trend") <= 0)
-             .then(1)
-             .otherwise(0)
-             .fill_null(0)
-             .alias("tip_regime_raw"))
-        )
+        # --- Step 3: Direction logic ---
+        if direction == "down_is_good":
+            base_expr = pl.when(pl.col("regime_trend") <=
+                                0).then(1).otherwise(0)
+        else:
+            base_expr = pl.when(pl.col("regime_trend") >=
+                                0).then(1).otherwise(0)
 
-        # Confirmation smoothing — require regime persistence
+        regime_df = regime_df.with_columns(
+            base_expr.fill_null(0).alias("regime_raw"))
+
+        # --- Step 4: Confirmation smoothing ---
         if confirm_days > 1:
-            df = df.with_columns(
-                pl.col("tip_regime_raw")
+            regime_df = regime_df.with_columns(
+                pl.col("regime_raw")
                 .rolling_mean(window_size=confirm_days, min_periods=confirm_days)
-                .over("ticker")
                 .map_batches(lambda s: (s > 0.5).cast(pl.Int8))
                 .fill_null(0)
-                .alias("tip_regime_confirmed")
+                .alias("regime_confirmed")
             )
         else:
-            df = df.with_columns(
-                pl.col("tip_regime_raw").alias("tip_regime_confirmed")
-            )
+            regime_df = regime_df.with_columns(
+                pl.col("regime_raw").alias("regime_confirmed"))
 
-        # Shift by 1 day to prevent lookahead; fill nulls with 0
-        df = df.with_columns(
-            pl.col("tip_regime_confirmed")
+        # --- Step 5: Shift to avoid lookahead ---
+        regime_df = regime_df.with_columns(
+            pl.col("regime_confirmed")
             .shift(1)
             .fill_null(0)
             .alias(dest_col)
         )
 
-        # Clean up intermediates
-        return df.drop(["tip_trend", "tip_regime_raw", "tip_regime_confirmed"])
+        # --- Step 6: Keep only date and final signal ---
+        regime_df = regime_df.select(["date", dest_col])
+
+        # --- Step 7: Join regime signal back to all rows ---
+        df = df.join(regime_df, on="date", how="left")
+
+        # Default missing signal to 0 (dates before regime exists)
+        df = df.with_columns(pl.col(dest_col).fill_null(0).cast(pl.Int8))
+
+        return df
 
     return transform

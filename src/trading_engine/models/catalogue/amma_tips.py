@@ -1,12 +1,11 @@
 from typing import Callable, Dict
-
 import polars as pl
 from polars import LazyFrame
 
 
 def AMMA_TIP(
         ticker: str,
-        momentum_weights: Dict[int, float],
+        momentum_weights: Dict[int, float],  # {window: weight}
         threshold: float = 0.0,
         long_enabled: bool = True,
         short_enabled: bool = False,
@@ -14,13 +13,13 @@ def AMMA_TIP(
     """
     Adaptive Momentum Model Averaging (AMMA) with TIP regime filter.
 
-    This version behaves identically to AMMA(), except that
-    each momentum signal is multiplied by the TIP regime column (`tip_signal`),
-    which acts as a binary gate: 1 = allow trades, 0 = avoid trades.
+    This behaves the same as AMMA(), except that all momentum signals are
+    gated by the binary 'tip_signal' feature from the model state.
+    (1 = allow trading, 0 = avoid trading)
 
-    Expected model state columns:
-      - close_momentum_<window>  (e.g. close_momentum_20)
-      - tip_signal               (from tip_regime_signal feature)
+    Expected columns in model state:
+      - close_momentum_<N>  (e.g. close_momentum_20)
+      - tip_signal
       - ticker, date
 
     Parameters
@@ -43,7 +42,7 @@ def AMMA_TIP(
     """
 
     def run_model(lf: LazyFrame) -> LazyFrame:
-        # Ensure tip_signal exists and fill missing with 0 (avoid)
+        # Ensure the TIP signal column exists; if not, default to 0 (avoid)
         if "tip_signal" not in lf.columns:
             lf = lf.with_columns(pl.lit(0).alias("tip_signal"))
         else:
@@ -53,70 +52,58 @@ def AMMA_TIP(
         sig_frames = []
 
         for window, weight in momentum_weights.items():
-            mom_col = f"close_momentum_{window}"
-
-            # Skip if momentum column missing
-            if mom_col not in lf.columns:
-                continue
+            colname = f"close_momentum_{window}"
 
             sig = (
                 lf.filter(pl.col("ticker") == ticker)
-                .select(["date", mom_col, "tip_signal"])
-                .rename({mom_col: "sig"})
+                .select(["date", colname, "tip_signal"])
+                .rename({colname: "sig"})
             )
 
-            # Basic long/short conditions
+            # Base signal logic
             long_cond = (pl.col("sig") > threshold) if long_enabled else None
             short_cond = (pl.col("sig") < -
                           threshold) if short_enabled else None
 
-            # Default signal = 0
             expr = pl.lit(0.0)
 
-            # Momentum logic gated by tip_signal
             if long_enabled and short_enabled:
                 expr = (
                     pl.when((pl.col("tip_signal") == 1)
                             & long_cond.fill_null(False))
-                    .then(weight)
+                    .then(pl.lit(1.0) * weight)
                     .when((pl.col("tip_signal") == 1) & short_cond.fill_null(False))
-                    .then(-weight)
-                    .otherwise(0.0)
+                    .then(pl.lit(-1.0) * weight)
+                    .otherwise(pl.lit(0.0))
                 )
             elif long_enabled:
                 expr = (
                     pl.when((pl.col("tip_signal") == 1)
                             & long_cond.fill_null(False))
-                    .then(weight)
-                    .otherwise(0.0)
+                    .then(pl.lit(1.0) * weight)
+                    .otherwise(pl.lit(0.0))
                 )
             elif short_enabled:
                 expr = (
                     pl.when((pl.col("tip_signal") == 1) &
                             short_cond.fill_null(False))
-                    .then(-weight)
-                    .otherwise(0.0)
+                    .then(pl.lit(-1.0) * weight)
+                    .otherwise(pl.lit(0.0))
                 )
 
-            weighted_sig = sig.with_columns(
+            weighted_sig = sig.select([
+                pl.col("date"),
                 expr.cast(pl.Float64).alias(f"sig_{window}")
-            ).select(["date", f"sig_{window}"])
+            ])
 
             sig_frames.append(weighted_sig)
 
-        # Combine all window signals
-        if not sig_frames:
-            # No valid signals → zero output
-            return lf.select(["date"]).with_columns(pl.lit(0.0).alias(ticker))
-
+        # Join on date
         combined = sig_frames[0]
         for frame in sig_frames[1:]:
-            combined = combined.join(frame, on="date", how="outer")
+            combined = combined.join(frame, on="date", how="inner")
 
-        # Fill missing signal values with 0
-        combined = combined.fill_null(0.0)
-
-        # Sum across weighted signals
+        # Sum across signals and produce final weight column
         weight_cols = [f"sig_{w}" for w in momentum_weights.keys()]
         final = combined.with_columns(
             sum(pl.col(c) for c in weight_cols).alias(ticker)
