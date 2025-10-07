@@ -84,4 +84,9 @@ FEATURES: Dict[str, dict] = {
         "mode": ProcessingMode.LAZY,
         "lookback": 7,
     },
+    "tip_regime": {
+        "func": tip_regime_signal("tips_close_1d", "tip_signal"),
+        "mode": ProcessingMode.LAZY,
+        "lookback": 252,
+    }
 }

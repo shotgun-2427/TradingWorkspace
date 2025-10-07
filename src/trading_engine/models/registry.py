@@ -1,4 +1,5 @@
 from trading_engine.models.catalogue.amma import AMMA
+from trading_engine.models.catalogue.amma_tips import AMMA_TIP
 from trading_engine.models.catalogue.inverse_momentum_mean_reversion import InverseMomentumMeanReversionModel
 from trading_engine.models.catalogue.momentum import MomentumModel
 from trading_engine.models.catalogue.natr_mean_reversion import NATRMeanReversionModel
@@ -193,9 +194,10 @@ MODELS = {
         "tickers": ["BIL-US"],
         "columns": [
             "close_momentum_10", "close_momentum_20", "close_momentum_30",
-            "close_momentum_60", "close_momentum_90", "close_momentum_120", "close_momentum_240"
+            "close_momentum_60", "close_momentum_90", "close_momentum_120",
+            "close_momentum_240", "tip_signal"
         ],
-        "function": AMMA(
+        "function": AMMA_TIP(
             ticker="BIL-US",
             momentum_weights={
                 10: 0,
