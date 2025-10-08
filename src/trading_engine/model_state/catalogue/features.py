@@ -1,4 +1,3 @@
-from polars import LazyFrame
 from typing import Callable
 
 import polars as pl
