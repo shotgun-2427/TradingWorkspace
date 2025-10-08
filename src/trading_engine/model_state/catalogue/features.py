@@ -19,7 +19,8 @@ def moving_average(source_col: str, dest_col: str, window: int) -> Callable[[Laz
 def momentum(source_col: str, dest_col: str, window: int) -> Callable[[LazyFrame], LazyFrame]:
     def transform(df: LazyFrame) -> LazyFrame:
         return df.with_columns(
-            (pl.col(source_col) - pl.col(source_col).shift(window)).over("ticker").alias(dest_col)
+            (pl.col(source_col) - pl.col(source_col).shift(window)
+             ).over("ticker").alias(dest_col)
         )
 
     return transform
@@ -33,13 +34,17 @@ def rsi(source_col: str, dest_col: str, window: int) -> Callable[[DataFrame], Da
         ])
 
         df = df.with_columns([
-            pl.when(pl.col("delta") > 0).then(pl.col("delta")).otherwise(0.0).alias("gain"),
-            pl.when(pl.col("delta") < 0).then(-pl.col("delta")).otherwise(0.0).alias("loss"),
+            pl.when(pl.col("delta") > 0).then(
+                pl.col("delta")).otherwise(0.0).alias("gain"),
+            pl.when(pl.col("delta") < 0).then(-pl.col("delta")
+                                              ).otherwise(0.0).alias("loss"),
         ])
 
         df = df.with_columns([
-            pl.col("gain").rolling_mean(window_size=window).over("ticker").alias("avg_gain"),
-            pl.col("loss").rolling_mean(window_size=window).over("ticker").alias("avg_loss"),
+            pl.col("gain").rolling_mean(window_size=window).over(
+                "ticker").alias("avg_gain"),
+            pl.col("loss").rolling_mean(window_size=window).over(
+                "ticker").alias("avg_loss"),
         ])
 
         df = df.with_columns([
