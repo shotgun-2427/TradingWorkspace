@@ -1,23 +1,20 @@
-start_date: 2004-12-31
+start_date: 2004-01-01
 end_date: 2026-12-31
-universe: [
-  SPY-US, SLV-US, GLD-US, TLT-US, USO-US, UNG-US, IXJ-US,
-  KXI-US, JXI-US, IXG-US, IXN-US, RXI-US, MXI-US, EXI-US,
-  IXC-US, IEI-US, SHY-US, BIL-US, JPXN-US, INDA-US, MCHI-US,
-  EZU-US, IBIT-US, ETHA-US, VIXY-US
-]
+universe: [ TLT, IEI, SHY, BIL, SLV, GLD, USO, UNG, SPY, EWJ, INDA, MCHI, IBIT, ETHA, EZU, VIXY ]
+
 model_state_features: [
-  close_momentum_1, close_momentum_5, close_momentum_10,
-  close_momentum_14, close_momentum_20, close_momentum_32,
-  close_momentum_60, close_momentum_64, close_momentum_240,
-  close_rsi_14, natr_7, natr_14
+  close_momentum_10, close_momentum_20, close_momentum_30,
+  close_momentum_60, close_momentum_90, close_momentum_120,
+  close_momentum_240
 ]
+
 models: [
-  RXI_TLT_pml_10, GLD_USO_nml_10, IXJ_USO_pml_10,
-  TLT_IXC_nml_10, IXJ_KXI_pml_10, etf_mr_jxi_60_0.001,
-  natr_7_14
+  TLT_AMMA, IEI_AMMA, SHY_AMMA, BIL_AMMA, SLV_AMMA, GLD_AMMA,
+  USO_AMMA, UNG_AMMA, SPY_AMMA, EWJ_AMMA, INDA_AMMA, MCHI_AMMA,
+  IBIT_AMMA, ETHA_AMMA, EZU_AMMA, VIXY_AMMA
 ]
-optimizers: [ equal_weight ]
+
+optimizers: [ mean_variance ]
 ib_gateway:
   host: 127.0.0.1
   port: 4002
