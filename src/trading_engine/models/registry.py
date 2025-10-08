@@ -1,5 +1,5 @@
 from trading_engine.models.catalogue.amma import AMMA
-from trading_engine.models.catalogue.amma_tips import AMMA_regime
+from trading_engine.models.catalogue.amma_regime import AMMA_regime
 from trading_engine.models.catalogue.inverse_momentum_mean_reversion import InverseMomentumMeanReversionModel
 from trading_engine.models.catalogue.momentum import MomentumModel
 from trading_engine.models.catalogue.natr_mean_reversion import NATRMeanReversionModel
