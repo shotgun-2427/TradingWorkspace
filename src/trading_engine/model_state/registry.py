@@ -84,9 +84,4 @@ FEATURES: Dict[str, dict] = {
         "mode": ProcessingMode.LAZY,
         "lookback": 7,
     },
-    "tip_signal": {
-        "func": regime_signal_from_ticker("TIP-US", "adjusted_close_1d", "tip_signal", trend_window=252, confirm_days=40, direction="down_is_good"),
-        "mode": ProcessingMode.LAZY,
-        "lookback": 252,
-    },
 }
