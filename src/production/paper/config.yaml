@@ -1,6 +1,10 @@
 start_date: 2004-01-01
 end_date: 2026-12-31
-universe: [ TLT, IEI, SHY, BIL, SLV, GLD, USO, UNG, SPY, EWJ, INDA, MCHI, IBIT, ETHA, EZU, VIXY ]
+universe: [
+  TLT-US, IEI-US, SHY-US, BIL-US, SLV-US, GLD-US,
+  USO-US, UNG-US, SPY-US, EWJ-US, INDA-US, MCHI-US,
+  IBIT-US, ETHA-US, EZU-US, VIXY-US
+]
 
 model_state_features: [
   close_momentum_10, close_momentum_20, close_momentum_30,
