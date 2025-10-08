@@ -6,10 +6,14 @@ from hawk_backtester import HawkBacktester
 from polars import LazyFrame, DataFrame
 
 from common.constants import ProcessingMode
+from common.logging import setup_logger
 from trading_engine.model_state import FEATURES
 from trading_engine.models import MODELS
 from trading_engine.optimizers import OPTIMIZERS
+from trading_engine.optimizers.catalogue.equal_weight import EqualWeightOptimizer
 from trading_engine.utils import calculate_calendar_lookback
+
+logger = setup_logger(__name__)
 
 pl.enable_string_cache()
 
@@ -253,7 +257,12 @@ def orchestrate_portfolio_backtests(
             raise KeyError(f"Unknown optimizer: {name}")
 
         optimizer_fn = registry[name]["function"]  # Callable[[Dict[str, LF], Dict], LF]
-        raw = optimizer_fn(model_insights, backtest_results)  # LazyFrame or DataFrame
+
+        try:
+            raw = optimizer_fn(model_insights, backtest_results)  # LazyFrame or DataFrame
+        except ValueError as e:
+            logger.error(f"{name} failed: {e}. Falling back to equal weights.")
+            raw = EqualWeightOptimizer()(model_insights, backtest_results)
 
         lf = _ensure_lazy(raw)
         lf = _coerce_weights_to_float(lf)

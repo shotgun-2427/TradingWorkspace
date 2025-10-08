@@ -8,3 +8,5 @@ opentelemetry-api
 opentelemetry-sdk
 opentelemetry-exporter-otlp
 pymsteams
+cvxpy
+scikit-learn
