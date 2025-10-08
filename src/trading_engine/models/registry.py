@@ -435,5 +435,22 @@ MODELS = {
                 240: .062
             },
         ),
-    }
+    }, 
+        "EZU_AMMA": {
+        "tickers": ["EZU-US"],
+        "columns": [
+            "close_momentum_10", "close_momentum_20", 
+            "close_momentum_60", "close_momentum_120", "close_momentum_240"
+        ],
+        "function": AMMA(
+            ticker="EZU-US",
+            momentum_weights={
+                10: 0,
+                20: 0.0332,
+                60: 0,
+                120: 0.9668,
+                240: 0
+            },
+        ),
+    },
 }
