@@ -67,7 +67,7 @@ def orchestrate_marginal_simulations(config, model_insights, model_backtests, ma
             portfolio_backtests = orchestrate_portfolio_simulations(
                 prices=prices,
                 portfolio_insights=portfolio_insights,
-                initial_value=1_000_000.0,
+                initial_value=500_000.0,
             )
             
             model_results = create_marginal_df(config.optimizers, main_portfolio_backtests, portfolio_backtests)

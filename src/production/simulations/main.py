@@ -82,7 +82,7 @@ async def run_trading_engine(config: Config, writer: AsyncGCSWriter, current_dat
         model_backtests = orchestrate_model_simulations(
             prices=prices,
             model_insights=model_insights,
-            initial_value=1_000_000.0,
+            initial_value=500_000.0,
         )
     await asyncio.gather(*(
         writer.save_polars(df, f"model_backtests_{model}_{kind}.csv")
@@ -108,7 +108,7 @@ async def run_trading_engine(config: Config, writer: AsyncGCSWriter, current_dat
         portfolio_backtests = orchestrate_portfolio_simulations(
             prices=prices,
             portfolio_insights=portfolio_insights,
-            initial_value=1_000_000.0,
+            initial_value=500_000.0,
         )
     await asyncio.gather(*(
         writer.save_polars(df, f"portfolio_backtests_{pname}_{kind}.csv")
