@@ -11,6 +11,6 @@ OPTIMIZERS = {
         "function": MinAvgDrawdownOptimizer(window_days=252)
     },
     "mean_variance": {
-        "function": MeanVarianceOptimizer(gamma = 5.0, lookback=252, allow_short = True, short_limit = -0.2, max_position=0.25)
+        "function": MeanVarianceOptimizer(gamma = 5.0, lookback=252, allow_short = True, short_limit = -0.2, max_position=0.25, min_position=0.03)
     }
 }
