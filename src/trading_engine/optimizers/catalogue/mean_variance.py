@@ -14,7 +14,8 @@ def MeanVarianceOptimizer(
     lookback: int = 252,
     allow_short: bool = False,
     short_limit: float = -1.0,
-    max_position: float = 1.0
+    max_position: float = 1.0,
+    min_position: float = 0.0
 ) -> Callable[[Dict[str, LazyFrame], Dict], LazyFrame]:
     """
     Weights model insights by maximizing mean-variance utility: μ'w - γw'Σw.
@@ -27,6 +28,7 @@ def MeanVarianceOptimizer(
       allow_short: If True, allows short positions. If False, adds w >= 0 constraint.
       short_limit: Maximum short weight per position (only used if allow_short=True)
       max_position: Maximum weight per model (default 1.0 = 100%)
+      min_position: Minimum absolute position size at ticker level. Positions below this are zeroed out to reduce transaction costs (default 0.0 = no filtering)
 
     Inputs:
       model_insights: { model_name: LazyFrame(["date", ...tickers...]) }  (wide)
@@ -86,6 +88,9 @@ def MeanVarianceOptimizer(
         if weights is None or np.any(np.isnan(weights)):
             raise ValueError("optimizer failed to converge")
 
+        # Clean numerical errors 
+        weights[np.abs(weights) < 1e-6] = 0
+
         # Create model weights lookup
         model_weights_lf = pl.DataFrame({
             "model": models,
@@ -103,6 +108,13 @@ def MeanVarianceOptimizer(
             .with_columns((pl.col("position") * pl.col("model_weight")).alias("w"))
             .group_by(["date", "ticker"])
             .agg(pl.col("w").sum())
+            # Filter tiny ticker positions (no renormalization)
+            .with_columns(
+                pl.when(pl.col("w").abs() < min_position)
+                .then(0.0)
+                .otherwise(pl.col("w"))
+                .alias("w")
+            )
         )
         
         combined_wide_df = (
