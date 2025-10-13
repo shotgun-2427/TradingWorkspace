@@ -26,7 +26,7 @@ class IBKR:
 
     async def __fetch_initial_data(self):
         await self.__fetch_nav()
-        # await self.__fetch_positions()
+        await self.__fetch_positions()
 
     async def __fetch_nav(self):
         for v in self.ib.accountValues():
@@ -34,9 +34,9 @@ class IBKR:
                 self.account.nav = float(v.value)
                 break
 
-    # async def __fetch_positions(self):
-    #     for p in self.ib.positions():
-    #         self.account.positions[p.contract.symbol] = p
+    async def __fetch_positions(self):
+        for p in self.ib.positions():
+            self.account.positions[p.contract.symbol] = p
 
     def get_nav(self) -> float:
         return self.account.nav
