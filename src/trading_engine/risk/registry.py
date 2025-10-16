@@ -8,6 +8,11 @@ RISK_MODELS = {
     "sample": {"function": SampleCovariance()},
     "sample_with_ridge": {"function": SampleCovarianceWithRidge(ridge=1e-3)},
     "naive_dcc": {
-        "function": NaiveDCC(beta_vol=0.94, beta_corr=0.97, ridge=1e-3, center=True)
+        "function": NaiveDCC(
+            half_life_vol=21,
+            half_life_corr=120,
+            ridge=1e-3,
+            center=True,
+        )
     },
 }

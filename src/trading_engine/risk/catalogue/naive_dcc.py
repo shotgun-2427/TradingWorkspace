@@ -4,8 +4,8 @@ import numpy as np
 
 
 def NaiveDCC(
-    beta_vol: float = 0.94,
-    beta_corr: float = 0.97,
+    half_life_vol: float = 11.6,
+    half_life_corr: float = 23.4,
     ridge: float = 1e-3,
     center: bool = False,
 ) -> Callable[[np.ndarray], np.ndarray]:
@@ -16,20 +16,27 @@ def NaiveDCC(
     outer-products of standardized returns with an EWMA to form a correlation
     estimate, and rescales by the most recent EWMA volatilities.
 
-    :param beta_vol: EWMA decay for per-asset volatility (0 < beta_vol < 1)
-    :param beta_corr: EWMA decay for correlation of standardized returns
-                      (0 < beta_corr < 1)
+    :param half_life_vol: Half-life (in periods) for EWMA volatility estimation.
+                         After this many periods, a volatility shock retains 50%
+                         of its impact. Must be > 0.
+    :param half_life_corr: Half-life (in periods) for EWMA correlation estimation.
+                          After this many periods, a correlation shock retains 50%
+                          of its impact. Must be > 0.
     :param ridge: Non-negative scalar ε to add to the diagonal of the result
     :param center: If True, subtract per-asset mean before volatility estimation
     :return: function(window_returns) -> covariance matrix (N x N)
     """
 
-    if not (0.0 < beta_vol < 1.0):  # pragma: no cover - defensive guard
-        raise ValueError("beta_vol must be in (0, 1)")
-    if not (0.0 < beta_corr < 1.0):  # pragma: no cover - defensive guard
-        raise ValueError("beta_corr must be in (0, 1)")
+    if half_life_vol <= 0.0:  # pragma: no cover - defensive guard
+        raise ValueError("half_life_vol must be positive")
+    if half_life_corr <= 0.0:  # pragma: no cover - defensive guard
+        raise ValueError("half_life_corr must be positive")
     if ridge < 0.0:  # pragma: no cover - defensive guard
         raise ValueError("ridge must be non-negative")
+
+    # Convert half-lives to beta parameters for internal EWMA calculations
+    beta_vol: float = 0.5 ** (1.0 / half_life_vol)
+    beta_corr: float = 0.5 ** (1.0 / half_life_corr)
 
     one_minus_beta_vol: float = 1.0 - beta_vol
     one_minus_beta_corr: float = 1.0 - beta_corr
