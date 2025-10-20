@@ -200,6 +200,8 @@ def _solve_mvo(
     turnover_lambda: float,
     prev_w: Optional[np.ndarray],
     long_only: bool,
+    w_min: Optional[np.ndarray] = None,
+    w_max: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """
     Solve the MVO problem with GMV=1 and optional long-only constraint using CVXPY.
@@ -208,6 +210,7 @@ def _solve_mvo(
     Constraints:
       - If long_only: w >= 0, sum(w) == 1
       - Else:        ||w||_1 == 1 (implemented via w = w+ - w-, sum(w+)+sum(w-) == 1)
+      - Optional box constraints: w_min <= w <= w_max
 
     :param cov: Covariance matrix (N x N)
     :param mu: Expected returns vector (N,)
@@ -215,6 +218,8 @@ def _solve_mvo(
     :param turnover_lambda: Non-negative penalty on ||w - w_prev||^2
     :param prev_w: Previous weights or None
     :param long_only: Enforce non-negative weights and full investment if True
+    :param w_min: Optional minimum weight bounds per model (N,)
+    :param w_max: Optional maximum weight bounds per model (N,)
     :return: Weight vector (N,)
     """
     n: int = cov.shape[0]
@@ -226,6 +231,13 @@ def _solve_mvo(
     if long_only:
         w = cp.Variable(n, nonneg=True)
         constraints = [cp.sum(w) == 1.0]
+
+        # Add box constraints if provided
+        if w_min is not None:
+            constraints.append(w >= w_min)
+        if w_max is not None:
+            constraints.append(w <= w_max)
+
         quad = 0.5 * cp.quad_form(w, P_psd)
         lin = -mu @ w
         reg = (
@@ -247,6 +259,13 @@ def _solve_mvo(
     w_minus = cp.Variable(n, nonneg=True)
     w = w_plus - w_minus
     constraints = [cp.sum(w_plus) + cp.sum(w_minus) == 1.0]
+
+    # Add box constraints if provided
+    if w_min is not None:
+        constraints.append(w >= w_min)
+    if w_max is not None:
+        constraints.append(w <= w_max)
+
     quad = 0.5 * cp.quad_form(w, P_psd)
     lin = -mu @ w
     reg = (
@@ -276,6 +295,7 @@ def _rolling_mvo_alphas(
     vol_floor: float = 1e-6,
     mu_scale: float = 1.0,
     long_only: bool = False,
+    model_weight_bounds: Optional[Dict[str, Dict[str, float]]] = None,
 ) -> pl.DataFrame:
     """
     Compute per-date model coefficients via rolling MVO.
@@ -286,6 +306,7 @@ def _rolling_mvo_alphas(
     :param fallback: Warmup behavior when insufficient lookback ('equal' or 'zero')
     :param turnover_lambda: Non-negative penalty on turnover
     :param kappa: Risk aversion scaling on Σ
+    :param model_weight_bounds: Optional dict mapping model_name -> {"min": float, "max": float}
     :return: DataFrame of alphas with columns ['date', <models...>]
     """
     model_names, ret_mat, dates = _prepare_returns(ret_wide)
@@ -294,6 +315,19 @@ def _rolling_mvo_alphas(
 
     n_models: int = len(model_names)
     cov_win: int = int(cov_window_days)
+
+    # Convert weight bounds dictionary to arrays
+    w_min: Optional[np.ndarray] = None
+    w_max: Optional[np.ndarray] = None
+    if model_weight_bounds is not None:
+        w_min = np.array(
+            [model_weight_bounds.get(m, {}).get("min", -np.inf) for m in model_names],
+            dtype=float,
+        )
+        w_max = np.array(
+            [model_weight_bounds.get(m, {}).get("max", np.inf) for m in model_names],
+            dtype=float,
+        )
 
     alphas: List[List[float]] = []
     alpha_dates: List[str] = []
@@ -330,6 +364,8 @@ def _rolling_mvo_alphas(
             turnover_lambda=turnover_lambda,
             prev_w=prev,
             long_only=long_only,
+            w_min=w_min,
+            w_max=w_max,
         )
 
         alphas.append(w.tolist())
@@ -405,6 +441,7 @@ def MVOAggregator(
     vol_floor: float = 1e-6,
     mu_scale: float = 1.0,
     long_only: bool = False,
+    model_weight_bounds: Optional[Dict[str, Dict[str, float]]] = None,
 ) -> Callable[[Dict[str, LazyFrame], Dict], LazyFrame]:
     """
     Aggregator that computes model-level mean-variance weights using cross-model
@@ -421,6 +458,8 @@ def MVOAggregator(
     :param vol_floor: Minimum volatility floor to avoid division by zero
     :param mu_scale: Global scaling factor applied to μ
     :param long_only: If True, enforce non-negative weights before GMV normalization
+    :param model_weight_bounds: Optional dict mapping model_name -> {"min": float, "max": float}
+                                to constrain individual model weights (e.g., {"Model1": {"min": 0.0, "max": 0.3}})
     :return: Callable mapping (model_insights, backtest_results) -> LazyFrame of combined weights.
     """
 
@@ -458,6 +497,7 @@ def MVOAggregator(
             vol_floor=vol_floor,
             mu_scale=mu_scale,
             long_only=long_only,
+            model_weight_bounds=model_weight_bounds,
         )
 
         # 3) Combine per-model ticker weights scaled by alphas(date, model)

@@ -1,8 +1,9 @@
-from typing import Callable, Optional, Protocol, List, Tuple
+from typing import Callable, Optional, Protocol, List, Tuple, Dict
 
 import numpy as np
 import polars as pl
 from polars import DataFrame, LazyFrame
+import cvxpy as cp
 
 
 class RiskModel(Protocol):
@@ -115,11 +116,15 @@ def _solve_mv(
     gamma: float,
     lambda_te: float,
     kappa: float,
+    w_min: Optional[np.ndarray] = None,
+    w_max: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """
     Solve the mean-variance tracking-error objective:
 
-    (κ Σ + 2λ I) w = γ μ + 2λ w_target
+    minimize_w  0.5 w^T (κ Σ) w  -  γ μ^T w  +  λ ||w - w_target||^2
+
+    With optional box constraints: w_min <= w <= w_max
 
     :param cov: Covariance matrix Σ (N x N)
     :param mu: Expected returns vector μ (N,)
@@ -127,14 +132,94 @@ def _solve_mv(
     :param gamma: Return-seeking weight γ
     :param lambda_te: Tracking-error weight λ (L2)
     :param kappa: Risk scaling κ applied to Σ
+    :param w_min: Optional minimum weight bounds per asset (N,)
+    :param w_max: Optional maximum weight bounds per asset (N,)
     :return: Solution vector w (N,)
     """
-    A = (kappa * cov) + (2.0 * lambda_te) * np.eye(cov.shape[0])
-    b = gamma * mu + 2.0 * lambda_te * target_w
-    try:
-        return np.linalg.solve(A, b)
-    except np.linalg.LinAlgError:
-        return np.linalg.pinv(A) @ b
+    n = cov.shape[0]
+
+    # Check if we have any finite constraints
+    has_constraints = False
+    if w_min is not None and np.any(np.isfinite(w_min)):
+        has_constraints = True
+    if w_max is not None and np.any(np.isfinite(w_max)):
+        has_constraints = True
+
+    # If no constraints, use closed-form solution (faster)
+    if not has_constraints:
+        A = (kappa * cov) + (2.0 * lambda_te) * np.eye(n)
+        b = gamma * mu + 2.0 * lambda_te * target_w
+        try:
+            return np.linalg.solve(A, b)
+        except np.linalg.LinAlgError:
+            return np.linalg.pinv(A) @ b
+
+    # Use CVXPY for constrained optimization
+    w = cp.Variable(n)
+    kappa_cov = kappa * cov
+    # Symmetrize for numerical stability
+    kappa_cov = 0.5 * (kappa_cov + kappa_cov.T)
+    P_psd = cp.psd_wrap(kappa_cov)
+
+    # Clean inputs - replace NaN/inf with safe values
+    mu_clean = np.nan_to_num(mu, nan=0.0, posinf=0.0, neginf=0.0)
+    target_w_clean = np.nan_to_num(target_w, nan=0.0, posinf=0.0, neginf=0.0)
+
+    # Objective: 0.5 w^T (κ Σ) w  -  γ μ^T w  +  λ ||w - w_target||^2
+    quad_risk = 0.5 * cp.quad_form(w, P_psd)
+    lin_return = -gamma * (mu_clean @ w)
+    tracking_error = lambda_te * cp.sum_squares(w - target_w_clean)
+
+    objective = cp.Minimize(quad_risk + lin_return + tracking_error)
+
+    constraints = []
+    # Only add constraints for finite bounds (MOSEK doesn't handle inf well)
+    if w_min is not None:
+        finite_min = np.isfinite(w_min)
+        if np.any(finite_min):
+            for i in range(n):
+                if finite_min[i]:
+                    constraints.append(w[i] >= w_min[i])
+    if w_max is not None:
+        finite_max = np.isfinite(w_max)
+        if np.any(finite_max):
+            for i in range(n):
+                if finite_max[i]:
+                    constraints.append(w[i] <= w_max[i])
+
+    problem = cp.Problem(objective, constraints)
+    problem.solve(solver=cp.MOSEK, verbose=False)
+
+    if w.value is None:
+        # Fallback to unconstrained if solver fails
+        A = (kappa * cov) + (2.0 * lambda_te) * np.eye(n)
+        b = gamma * mu + 2.0 * lambda_te * target_w
+        try:
+            return np.linalg.solve(A, b)
+        except np.linalg.LinAlgError:
+            return np.linalg.pinv(A) @ b
+
+    return np.asarray(w.value, dtype=float).reshape(-1)
+
+
+def _apply_position_delta_constraint(
+    w_new: np.ndarray, w_prev: np.ndarray, min_delta: float
+) -> np.ndarray:
+    """
+    Apply minimum position change constraint: if changing a position,
+    must change by at least min_delta, otherwise keep it unchanged.
+
+    :param w_new: Proposed new weights (N,)
+    :param w_prev: Previous weights (N,)
+    :param min_delta: Minimum absolute position change required
+    :return: Adjusted weights (N,)
+    """
+    delta = np.abs(w_new - w_prev)
+    # Where delta is too small (but non-zero), revert to previous weight
+    too_small = (delta > 0) & (delta < min_delta)
+    w_adjusted = w_new.copy()
+    w_adjusted[too_small] = w_prev[too_small]
+    return w_adjusted
 
 
 def _rolling_optimize(
@@ -146,6 +231,9 @@ def _rolling_optimize(
     gamma: float,
     lambda_te: float,
     kappa: float,
+    w_min: Optional[np.ndarray] = None,
+    w_max: Optional[np.ndarray] = None,
+    min_position_delta: float = 0.0,
 ) -> Tuple[List[str], List[List[float]]]:
     """
     Compute rolling mean-variance optimized weights over dates.
@@ -158,6 +246,9 @@ def _rolling_optimize(
     :param gamma: Return-seeking weight
     :param lambda_te: Tracking-error weight
     :param kappa: Risk scaling
+    :param w_min: Optional minimum weight bounds per asset (N,)
+    :param w_max: Optional maximum weight bounds per asset (N,)
+    :param min_position_delta: Minimum position change required (0 disables)
     :return: (out_dates, out_weights)
     """
     out_weights: List[List[float]] = []
@@ -182,7 +273,15 @@ def _rolling_optimize(
             gamma=gamma,
             lambda_te=lambda_te,
             kappa=kappa,
+            w_min=w_min,
+            w_max=w_max,
         )
+
+        # Apply minimum position delta constraint if enabled
+        if min_position_delta > 0.0 and out_weights:
+            w_prev = np.array(out_weights[-1], dtype=float)
+            w = _apply_position_delta_constraint(w, w_prev, min_position_delta)
+
         out_weights.append(w.tolist())
         out_dates.append(dates[i])
 
@@ -195,14 +294,16 @@ def MeanVarianceOptimizer(
     lambda_te: float = 1.0,
     risk_model: Optional[RiskModel] = None,
     kappa: float = 1.0,
+    asset_weight_bounds: Optional[Dict[str, Dict[str, float]]] = None,
+    min_position_delta: float = 0.0,
 ) -> Callable[[DataFrame, DataFrame, dict | None], LazyFrame]:
     """
-    Mean-variance optimizer with tracking error penalty.
+    Mean-variance optimizer with tracking error penalty and optional constraints.
 
     Objective per date t:
       minimize_w  0.5 w^T Σ w  -  γ μ^T w  +  λ ||w - w_target||^2
 
-    Closed form solution:
+    Closed form solution (unconstrained):
       (Σ + 2λ I) w = γ μ + 2λ w_target  →  w = (Σ + 2λ I + ε I)^{-1} (γ μ + 2λ w_target)
 
     :param cov_window_days: Rolling window length (days) for covariance Σ_assets estimation.
@@ -211,6 +312,10 @@ def MeanVarianceOptimizer(
     :param lambda_te: L2 tracking penalty weight to stay close to desired weights w_target.
     :param risk_model: Callable(window_returns)->covariance; must be provided by the caller.
     :param kappa: Risk aversion scaling on Σ_assets (κ Σ). κ=1.0 preserves current behavior.
+    :param asset_weight_bounds: Optional dict mapping ticker -> {"min": float, "max": float}
+                                to constrain individual asset weights (e.g., {"SPY-US": {"min": 0.0, "max": 0.5}})
+    :param min_position_delta: Minimum position change required to rebalance (0 disables).
+                               E.g., 0.03 means only rebalance if changing by at least 3%.
     :return: Callable mapping (prices_df, desired_weights_df, config) → LazyFrame wide weights.
     """
 
@@ -231,6 +336,19 @@ def MeanVarianceOptimizer(
         if not tickers or joined.is_empty():
             return pl.DataFrame({"date": []}).lazy()
 
+        # Convert asset weight bounds dictionary to arrays
+        w_min: Optional[np.ndarray] = None
+        w_max: Optional[np.ndarray] = None
+        if asset_weight_bounds is not None:
+            w_min = np.array(
+                [asset_weight_bounds.get(t, {}).get("min", -np.inf) for t in tickers],
+                dtype=float,
+            )
+            w_max = np.array(
+                [asset_weight_bounds.get(t, {}).get("max", np.inf) for t in tickers],
+                dtype=float,
+            )
+
         ret_cols, ret_mat, target_mat, dates = _build_matrices(joined, tickers)
         out_dates, out_weights = _rolling_optimize(
             dates=dates,
@@ -241,6 +359,9 @@ def MeanVarianceOptimizer(
             gamma=gamma,
             lambda_te=lambda_te,
             kappa=kappa,
+            w_min=w_min,
+            w_max=w_max,
+            min_position_delta=min_position_delta,
         )
 
         result_df = pl.DataFrame(
