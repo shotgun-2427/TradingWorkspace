@@ -18,6 +18,9 @@ models: [
 ]
 aggregators: [ equal_weight ]
 portfolio_optimizers: [ mean_variance ]
+
+optimizer_start_date: 2024-10-01
+
 ib_gateway:
   host: 127.0.0.1
   port: 4002

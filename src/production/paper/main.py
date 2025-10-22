@@ -126,9 +126,21 @@ async def run_trading_engine(config: Config, writer: AsyncGCSWriter, current_dat
     optimized_insights = {}
     if portfolio_optimizers:
         with timed("production.portfolio_optimization_duration"):
+            # Trim data to optimizer_start_date if configured
+            optimizer_prices = prices
+            optimizer_aggregated_insights = aggregated_insights
+
+            optimizer_start_date = getattr(config, "optimizer_start_date", None)
+            if optimizer_start_date:
+                optimizer_prices = prices.filter(prices["date"] >= optimizer_start_date)
+                optimizer_aggregated_insights = {
+                    name: df.filter(df["date"] >= optimizer_start_date)
+                    for name, df in aggregated_insights.items()
+                }
+
             optimized_insights = orchestrate_portfolio_optimizations(
-                prices=prices,
-                aggregated_insights=aggregated_insights,
+                prices=optimizer_prices,
+                aggregated_insights=optimizer_aggregated_insights,
                 universe=config.universe,
                 optimizers=portfolio_optimizers,
             )
