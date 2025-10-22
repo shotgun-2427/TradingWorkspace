@@ -1,7 +1,4 @@
 from trading_engine.aggregators.catalogue.equal_weight import EqualWeightAggregator
-from trading_engine.aggregators.catalogue.min_avg_drawdown import (
-    MinAvgDrawdownAggregator,
-)
 from trading_engine.aggregators.catalogue.mvo_aggregator import MVOAggregator
 from trading_engine.risk.registry import RISK_MODELS
 

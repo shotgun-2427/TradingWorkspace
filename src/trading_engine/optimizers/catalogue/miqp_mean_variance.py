@@ -1,9 +1,9 @@
 from typing import Callable, Optional, Protocol, List, Tuple, Dict
 
+import cvxpy as cp
 import numpy as np
 import polars as pl
 from polars import DataFrame, LazyFrame
-import cvxpy as cp
 
 
 class RiskModel(Protocol):
@@ -69,7 +69,7 @@ def _align_prices_to_tickers(prices_df: DataFrame, tickers: List[str]) -> DataFr
 
 
 def _prepare_joined(
-    prices_df: DataFrame, desired_weights_df: DataFrame
+        prices_df: DataFrame, desired_weights_df: DataFrame
 ) -> Tuple[List[str], DataFrame]:
     """
     Align prices to desired weights tickers, compute returns, and inner-join by date.
@@ -93,7 +93,7 @@ def _prepare_joined(
 
 
 def _build_matrices(
-    joined: DataFrame, tickers: List[str]
+        joined: DataFrame, tickers: List[str]
 ) -> Tuple[List[str], np.ndarray, np.ndarray, List[str]]:
     """
     Build numpy matrices needed for rolling optimization.
@@ -110,18 +110,18 @@ def _build_matrices(
 
 
 def _solve_mv_miqp(
-    cov: np.ndarray,
-    mu: np.ndarray,
-    target_w: np.ndarray,
-    gamma: float,
-    lambda_te: float,
-    kappa: float,
-    w_prev: Optional[np.ndarray] = None,
-    min_position_delta: float = 0.0,
-    turnover_lambda: float = 0.0,
-    w_min: Optional[np.ndarray] = None,
-    w_max: Optional[np.ndarray] = None,
-    big_m: float = 10.0,
+        cov: np.ndarray,
+        mu: np.ndarray,
+        target_w: np.ndarray,
+        gamma: float,
+        lambda_te: float,
+        kappa: float,
+        w_prev: Optional[np.ndarray] = None,
+        min_position_delta: float = 0.0,
+        turnover_lambda: float = 0.0,
+        w_min: Optional[np.ndarray] = None,
+        w_max: Optional[np.ndarray] = None,
+        big_m: float = 10.0,
 ) -> np.ndarray:
     """
     Solve the mean-variance tracking-error objective with MIQP formulation for
@@ -173,9 +173,9 @@ def _solve_mv_miqp(
                 w_prev_clean = np.nan_to_num(w_prev, nan=0.0, posinf=0.0, neginf=0.0)
                 A = (kappa * cov) + 2.0 * (lambda_te + turnover_lambda) * np.eye(n)
                 b = (
-                    gamma * mu_clean
-                    + 2.0 * lambda_te * target_w_clean
-                    + 2.0 * turnover_lambda * w_prev_clean
+                        gamma * mu_clean
+                        + 2.0 * lambda_te * target_w_clean
+                        + 2.0 * turnover_lambda * w_prev_clean
                 )
             else:
                 A = (kappa * cov) + (2.0 * lambda_te) * np.eye(n)
@@ -340,19 +340,19 @@ def _solve_mv_miqp(
 
 
 def _rolling_optimize(
-    dates: List[str],
-    ret_mat: np.ndarray,
-    target_mat: np.ndarray,
-    cov_window_days: int,
-    risk_model: RiskModel,
-    gamma: float,
-    lambda_te: float,
-    kappa: float,
-    w_min: Optional[np.ndarray] = None,
-    w_max: Optional[np.ndarray] = None,
-    min_position_delta: float = 0.0,
-    turnover_lambda: float = 0.0,
-    big_m: float = 10.0,
+        dates: List[str],
+        ret_mat: np.ndarray,
+        target_mat: np.ndarray,
+        cov_window_days: int,
+        risk_model: RiskModel,
+        gamma: float,
+        lambda_te: float,
+        kappa: float,
+        w_min: Optional[np.ndarray] = None,
+        w_max: Optional[np.ndarray] = None,
+        min_position_delta: float = 0.0,
+        turnover_lambda: float = 0.0,
+        big_m: float = 10.0,
 ) -> Tuple[List[str], List[List[float]]]:
     """
     Compute rolling mean-variance optimized weights over dates using MIQP.
@@ -382,7 +382,7 @@ def _rolling_optimize(
             out_dates.append(dates[i])
             continue
 
-        window = ret_mat[i + 1 - cov_window_days : i + 1]
+        window = ret_mat[i + 1 - cov_window_days: i + 1]
         cov = risk_model(window)
         mu = target_mat[i]
         target_w = target_mat[i]
@@ -412,15 +412,15 @@ def _rolling_optimize(
 
 
 def MIQPMeanVarianceOptimizer(
-    cov_window_days: int = 60,
-    gamma: float = 1.0,
-    lambda_te: float = 1.0,
-    risk_model: Optional[RiskModel] = None,
-    kappa: float = 1.0,
-    asset_weight_bounds: Optional[Dict[str, Dict[str, float]]] = None,
-    min_position_delta: float = 0.0,
-    turnover_lambda: float = 0.0,
-    big_m: float = 10.0,
+        cov_window_days: int = 60,
+        gamma: float = 1.0,
+        lambda_te: float = 1.0,
+        risk_model: Optional[RiskModel] = None,
+        kappa: float = 1.0,
+        asset_weight_bounds: Optional[Dict[str, Dict[str, float]]] = None,
+        min_position_delta: float = 0.0,
+        turnover_lambda: float = 0.0,
+        big_m: float = 10.0,
 ) -> Callable[[DataFrame, DataFrame, dict | None], LazyFrame]:
     """
     Mean-variance optimizer with tracking error penalty, turnover penalty, using MIQP for exact
@@ -454,7 +454,7 @@ def MIQPMeanVarianceOptimizer(
     """
 
     def run(
-        prices_df: DataFrame, desired_weights_df: DataFrame, config: dict | None = None
+            prices_df: DataFrame, desired_weights_df: DataFrame, config: dict | None = None
     ) -> LazyFrame:
         if prices_df.is_empty() or desired_weights_df.is_empty():
             return pl.DataFrame({"date": []}).lazy()

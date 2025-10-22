@@ -13,6 +13,11 @@ COPY pyproject.toml poetry.lock* /work/
 RUN poetry config virtualenvs.create false \
  && poetry install --no-interaction -E research --no-root
 
+# Copy MOSEK license
+RUN mkdir -p /root/mosek
+COPY mosek.lic /root/mosek/mosek.lic
+ENV MOSEKLM_LICENSE_FILE=/root/mosek/mosek.lic
+
 RUN pip install jupyterlab ipywidgets matplotlib
 ENV PYTHONPATH=/work/src
 

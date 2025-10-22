@@ -1,19 +1,27 @@
-from trading_engine.core import run_full_backtest
 import numpy as np
 from scipy.stats import ttest_rel
-import polars as pl
+
 from common.utils import _get_metric
+from trading_engine.core import run_full_backtest
 
 
-def model_review_tests(baseline_config, candidate_config, optimizer="equal_weight"):
+def model_review_tests(baseline_config, candidate_config):
     """Validates if new model improves portfolio performance, risk, and diversification"""
-    baseline_models, baseline_portfolio = run_full_backtest(**baseline_config)
-    candidate_models, candidate_portfolio = run_full_backtest(**candidate_config)
+    baseline = run_full_backtest(**baseline_config)
+    candidate = run_full_backtest(**candidate_config)
 
-    baseline_results = baseline_portfolio[optimizer]["backtest_results"]
-    candidate_results = candidate_portfolio[optimizer]["backtest_results"]
-    baseline_metrics = baseline_portfolio[optimizer]["backtest_metrics"]
-    candidate_metrics = candidate_portfolio[optimizer]["backtest_metrics"]
+    baseline_models = baseline["model_simulations"]
+    candidate_models = candidate["model_simulations"]
+    baseline_portfolio = baseline["optimizer_simulations"]
+    candidate_portfolio = candidate["optimizer_simulations"]
+
+    baseline_optimizer = baseline_config["optimizers"][0]
+    candidate_optimizer = candidate_config["optimizers"][0]
+
+    baseline_results = baseline_portfolio[baseline_optimizer]["backtest_results"]
+    candidate_results = candidate_portfolio[candidate_optimizer]["backtest_results"]
+    baseline_metrics = baseline_portfolio[baseline_optimizer]["backtest_metrics"]
+    candidate_metrics = candidate_portfolio[candidate_optimizer]["backtest_metrics"]
 
     baseline_returns = np.asarray(baseline_results["daily_return"], dtype=float)
     candidate_returns = np.asarray(candidate_results["daily_return"], dtype=float)
@@ -51,8 +59,8 @@ def model_review_tests(baseline_config, candidate_config, optimizer="equal_weigh
         if isinstance(model_data, dict) and "backtest_results" in model_data:
             model_results = model_data["backtest_results"]
             model_returns = np.asarray(model_results["daily_return"], dtype=float)[
-                -min_len:
-            ]
+                            -min_len:
+                            ]
             if len(model_returns) == len(candidate_returns):
                 corr = np.corrcoef(candidate_returns, model_returns)[0, 1]
                 if not np.isnan(corr):
@@ -70,7 +78,6 @@ def model_review_tests(baseline_config, candidate_config, optimizer="equal_weigh
         "correlations": correlations,
         "max_drawdown_diff": float(max_drawdown_diff),
     }
-
 
 # to-do: write plotting utils for model backtest performance.
 # plot equity curve, with drawdown subplot (smaller)

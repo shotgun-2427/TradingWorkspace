@@ -4,7 +4,7 @@ from trading_engine.optimizers.catalogue.miqp_mean_variance import (
 )
 from trading_engine.risk.registry import RISK_MODELS
 
-PORTFOLIO_OPTIMIZERS = {
+OPTIMIZERS = {
     "mean_variance": {
         "function": MeanVarianceOptimizer(
             cov_window_days=240,
