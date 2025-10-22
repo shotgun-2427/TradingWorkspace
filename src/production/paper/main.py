@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from opentelemetry import trace
@@ -12,11 +12,20 @@ from common.logging import setup_logger
 from common.model import Config
 from common.otel import setup_otel, flush_otel, timed
 from common.utils import read_config_yaml, post_to_teams
-from production.paper.core import construct_goal_positions, construct_rebalance_orders, to_ibkr_basket_csv
+from production.paper.core import (
+    construct_goal_positions,
+    construct_rebalance_orders,
+    to_ibkr_basket_csv,
+)
 from production.paper.validation import validate_production_config
 from trading_engine.core import (
-    read_data, create_model_state, orchestrate_model_backtests, orchestrate_model_simulations,
-    orchestrate_portfolio_backtests, orchestrate_portfolio_simulations
+    read_data,
+    create_model_state,
+    orchestrate_model_backtests,
+    orchestrate_model_simulations,
+    orchestrate_portfolio_simulations,
+    orchestrate_portfolio_aggregation,
+    orchestrate_portfolio_optimizations,
 )
 
 logger = setup_logger(__name__)
@@ -30,24 +39,30 @@ async def setup() -> tuple:
     logger.info(f"Configuration loaded: {config}")
 
     # TODO: Add max(current_date, config.start_date) logic for testing
-    current_date_str = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
+    current_date = datetime.now(ZoneInfo("America/New_York"))
+    current_date_str = current_date.strftime("%Y-%m-%d")
+    optimizer_start_date = (current_date - timedelta(days=365)).strftime("%Y-%m-%d")
 
     # GCS Writer
     gcs_writer = AsyncGCSWriter(
         bucket_name="wsb-hc-qasap-bucket-1",
         prefix=f"hcf/paper/production_audit/{current_date_str}",
     )
-    logger.info(f"Using GCS bucket: {gcs_writer.bucket_name}, prefix: {gcs_writer.prefix}")
+    logger.info(
+        f"Using GCS bucket: {gcs_writer.bucket_name}, prefix: {gcs_writer.prefix}"
+    )
 
-    return config, current_date_str, gcs_writer
+    return config, current_date_str, gcs_writer, optimizer_start_date
 
 
-async def run_trading_engine(config: Config, writer: AsyncGCSWriter, current_date: str):
+async def run_trading_engine(config: Config, writer: AsyncGCSWriter, current_date: str, optimizer_start_date: str):
     with timed("production.read_data_duration"):
         lf = read_data()
 
     # ==== validate data (check if the latest date in the data is "current" date, otherwise it's not a trading day)
-    latest_date = lf.select("date").sort("date", descending=True).first().collect().item()
+    latest_date = (
+        lf.select("date").sort("date", descending=True).first().collect().item()
+    )
 
     if latest_date.strftime("%Y-%m-%d") != current_date:
         logger.info(f"Latest date in data: {latest_date}, current date: {current_date}")
@@ -69,14 +84,14 @@ async def run_trading_engine(config: Config, writer: AsyncGCSWriter, current_dat
     # ==== orchestrate model backtests
     with timed("production.model_backtests_duration"):
         model_insights = orchestrate_model_backtests(
-            model_state=model_state,
-            models=config.models,
-            universe=config.universe
+            model_state=model_state, models=config.models, universe=config.universe
         )
-    await asyncio.gather(*(
-        writer.save_polars(df, f"model_insights_{name}.csv")
-        for name, df in model_insights.items()
-    ))
+    await asyncio.gather(
+        *(
+            writer.save_polars(df, f"model_insights_{name}.csv")
+            for name, df in model_insights.items()
+        )
+    )
 
     # ==== orchestrate model simulations
     with timed("production.model_simulations_duration"):
@@ -85,39 +100,84 @@ async def run_trading_engine(config: Config, writer: AsyncGCSWriter, current_dat
             model_insights=model_insights,
             initial_value=500_000.0,
         )
-    await asyncio.gather(*(
-        writer.save_polars(df, f"model_backtests_{model}_{kind}.csv")
-        for model, results in model_backtests.items()
-        for kind, df in results.items()
-    ))
+    await asyncio.gather(
+        *(
+            writer.save_polars(df, f"model_backtests_{model}_{kind}.csv")
+            for model, results in model_backtests.items()
+            for kind, df in results.items()
+        )
+    )
 
-    # ==== orchestrate portfolio backtests
-    with timed("production.portfolio_backtests_duration"):
-        portfolio_insights = orchestrate_portfolio_backtests(
-            optimizers=config.optimizers,
+    logger.info("start aggreg")
+
+    # ==== orchestrate portfolio aggregation
+    with timed("production.portfolio_aggregation_duration"):
+        aggregated_insights = orchestrate_portfolio_aggregation(
             model_insights=model_insights,
             backtest_results=model_backtests,
             universe=config.universe,
+            aggregators=config.aggregators,
         )
-    await asyncio.gather(*(
-        writer.save_polars(df, f"portfolio_insights_{name}.csv")
-        for name, df in portfolio_insights.items()
-    ))
+    await asyncio.gather(
+        *(
+            writer.save_polars(df, f"aggregated_insights_{name}.csv")
+            for name, df in aggregated_insights.items()
+        )
+    )
+
+    logger.info("end aggreg")
+    logger.info("started optimizer")
+
+    # ==== optional: orchestrate asset-level portfolio optimization
+    portfolio_optimizers = getattr(config, "portfolio_optimizers", [])  # optional field
+    optimized_insights = {}
+    if portfolio_optimizers:
+        with timed("production.portfolio_optimization_duration"):
+            # Trim data to optimizer_start_date if configured
+            optimizer_prices = prices
+            optimizer_aggregated_insights = aggregated_insights
+
+            if optimizer_start_date:
+                optimizer_prices = prices.filter(prices["date"] >= optimizer_start_date)
+                optimizer_aggregated_insights = {
+                    name: df.filter(df["date"] >= optimizer_start_date)
+                    for name, df in aggregated_insights.items()
+                }
+
+            optimized_insights = orchestrate_portfolio_optimizations(
+                prices=optimizer_prices,
+                aggregated_insights=optimizer_aggregated_insights,
+                universe=config.universe,
+                optimizers=portfolio_optimizers,
+            )
+        await asyncio.gather(
+            *(
+                writer.save_polars(df, f"optimized_insights_{name}.csv")
+                for name, df in optimized_insights.items()
+            )
+        )
+
+    logger.info("end optim")
+
+    # Choose which insights to simulate and return (prefer optimizer if present)
+    final_insights = optimized_insights if optimized_insights else aggregated_insights
 
     # ==== orchestrate portfolio simulations
     with timed("production.portfolio_simulations_duration"):
         portfolio_backtests = orchestrate_portfolio_simulations(
             prices=prices,
-            portfolio_insights=portfolio_insights,
-            initial_value=500_000.0,
+            portfolio_insights=final_insights,
+            initial_value=1_000_000.0,
         )
-    await asyncio.gather(*(
-        writer.save_polars(df, f"portfolio_backtests_{pname}_{kind}.csv")
-        for pname, results in portfolio_backtests.items()
-        for kind, df in results.items()
-    ))
+    await asyncio.gather(
+        *(
+            writer.save_polars(df, f"portfolio_backtests_{pname}_{kind}.csv")
+            for pname, results in portfolio_backtests.items()
+            for kind, df in results.items()
+        )
+    )
 
-    return portfolio_insights, prices
+    return final_insights, prices
 
 
 async def run_execution_engine(
@@ -129,7 +189,7 @@ async def run_execution_engine(
     ib_client = await IBKR.create(
         hostname=config.ib_gateway.host,
         port=config.ib_gateway.port,
-        client_id=config.ib_gateway.client_id
+        client_id=config.ib_gateway.client_id,
     )
 
     # ==== calculate goal positions
@@ -161,7 +221,9 @@ async def run_execution_engine(
     )
 
     # ==== write CSV to GCS and return link
-    await writer.save_text(basket_csv, "ibkr_basket_moc.csv", content_type="text/csv; charset=utf-8")
+    await writer.save_text(
+        basket_csv, "ibkr_basket_moc.csv", content_type="text/csv; charset=utf-8"
+    )
     basket_url = f"https://storage.cloud.google.com/{writer.bucket_name}/{writer.prefix}/ibkr_basket_moc.csv"
     return basket_url
 
@@ -169,10 +231,10 @@ async def run_execution_engine(
 async def main():
     logger.info("Starting production pipeline.")
     # ==== setup
-    c, current_date, writer = await setup()
+    c, current_date, writer, optimizer_start_date = await setup()
 
     # ==== trading engine
-    portfolio_insights, prices = await run_trading_engine(c, writer, current_date)
+    portfolio_insights, prices = await run_trading_engine(c, writer, current_date, optimizer_start_date)
 
     # ==== execution engine
     portfolio_name, portfolio_insight = portfolio_insights.popitem()
@@ -190,19 +252,25 @@ async def main():
 
     # Post Goal Positions to Teams
     last_row_dict = portfolio_insight[-1].to_dict(as_series=False)
-    goal_position_list = [f"{k}: {round(v[0] * 100, 2)}%" for k, v in last_row_dict.items() if k != 'date']
+    goal_position_list = [
+        f"{k}: {round(v[0] * 100, 2)}%" for k, v in last_row_dict.items() if k != "date"
+    ]
     goal_position_string = "<br>".join(goal_position_list)
-    message = f"<strong>Goal Positions ({current_date})</strong><br>{goal_position_string}"
+    message = (
+        f"<strong>Goal Positions ({current_date})</strong><br>{goal_position_string}"
+    )
 
     if basket_path:
-        message += f"<br><br>IBKR Basket (MOC): <a href='{basket_path}'>Download CSV</a>"
+        message += (
+            f"<br><br>IBKR Basket (MOC): <a href='{basket_path}'>Download CSV</a>"
+        )
 
     logger.info(message)
-    post_to_teams(webhook_url=c.notifications['msteams_webhook'], message=message)
+    post_to_teams(webhook_url=c.notifications["msteams_webhook"], message=message)
 
 
 if __name__ == "__main__":
-    setup_otel('production_paper')
+    setup_otel("production_paper")
     tracer = trace.get_tracer(__name__)
 
     with tracer.start_as_current_span("production") as span:

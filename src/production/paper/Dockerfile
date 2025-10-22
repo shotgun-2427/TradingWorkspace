@@ -16,6 +16,11 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 COPY src/production/paper/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Copy MOSEK license
+RUN mkdir -p /root/mosek
+COPY mosek.lic /root/mosek/mosek.lic
+ENV MOSEKLM_LICENSE_FILE=/root/mosek/mosek.lic
+
 # Copy source code
 COPY src/production/paper /app/production/paper
 COPY src/common /app/common

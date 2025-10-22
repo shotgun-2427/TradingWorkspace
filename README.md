@@ -44,3 +44,47 @@ Before you begin, ensure you have the following:
 * [GitHub Docs](https://docs.github.com/)
 * [Google Cloud Authentication](https://cloud.google.com/docs/authentication/getting-started)
 
+
+## Poetry Instructions
+
+> [!NOTE]
+> The following instructions are for macOS/Linux machines and may not work exactly as expected on Windows systems.
+
+
+to install the dependencies using poetry, run the following
+```bash
+poetry install
+```
+
+To register the poetry enviroment as a jupyter kernel (for use with IDE notebook editors) 
+(this installs the kernel in a user specific location)
+
+```bash
+poetry run python -m ipykernel install --user --name trading-engine --display-name "Python (poetry) trading-engine"
+```
+(Optional) Check that the jupyter kernel installed properly
+```bash
+poetry run jupyter kernelspec list
+```
+
+After registering the kernel, you may need to restart your IDE (vscode, cursor) for it to display as an option.
+
+> [!NOTE]
+> When running notebook code via your IDE configuration, you may encounter an error related to google cloud storate.
+
+To fix the GCS issue, you'll need to export the enviroment varible within the notebook.
+Run a notebook cell with this line of code.
+
+```python
+# Set Google Application Credentials Enviroment (Only needed for 'local' poetry mode, not docker)
+
+# Use Absolute Path for Google Application Credentials
+import os
+os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = 'abs_path_to_your_service_account/service_account.json' # CHANGE THIS PATH
+```
+
+
+## Mosek Opt Liscense
+```bash
+export MOSEKLM_LICENSE_FILE=/path_to_lic_file/mosek.lic
+```

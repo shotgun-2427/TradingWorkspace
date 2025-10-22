@@ -32,13 +32,17 @@ def model_review_tests(baseline_config, candidate_config, optimizer="equal_weigh
     active_returns = candidate_returns - baseline_returns
     active_return_ann = np.mean(active_returns) * 252
     tracking_error = np.std(active_returns) * np.sqrt(252)
-    information_ratio = active_return_ann / tracking_error if tracking_error > 1e-8 else 0.0
+    information_ratio = (
+        active_return_ann / tracking_error if tracking_error > 1e-8 else 0.0
+    )
 
     # Economic Significance: Total return improvement minus additional trading costs
-    gross_benefit = (_get_metric(candidate_metrics, "annualized_return") -
-                     _get_metric(baseline_metrics, "annualized_return"))
-    transaction_cost = (_get_metric(candidate_metrics, "cumulative_slippage_cost") -
-                        _get_metric(baseline_metrics, "cumulative_slippage_cost"))
+    gross_benefit = _get_metric(candidate_metrics, "annualized_return") - _get_metric(
+        baseline_metrics, "annualized_return"
+    )
+    transaction_cost = _get_metric(
+        candidate_metrics, "cumulative_slippage_cost"
+    ) - _get_metric(baseline_metrics, "cumulative_slippage_cost")
     net_economic_benefit = gross_benefit - transaction_cost
 
     # Model Correlation: Measures similarity between new model and existing models (0=uncorrelated, 1=identical)
@@ -46,20 +50,30 @@ def model_review_tests(baseline_config, candidate_config, optimizer="equal_weigh
     for model_name, model_data in baseline_models.items():
         if isinstance(model_data, dict) and "backtest_results" in model_data:
             model_results = model_data["backtest_results"]
-            model_returns = np.asarray(model_results["daily_return"], dtype=float)[-min_len:]
+            model_returns = np.asarray(model_results["daily_return"], dtype=float)[
+                -min_len:
+            ]
             if len(model_returns) == len(candidate_returns):
                 corr = np.corrcoef(candidate_returns, model_returns)[0, 1]
                 if not np.isnan(corr):
                     correlations.append(float(corr))
 
     # Max Drawdown Impact: Change in worst peak-to-trough loss when adding new model
-    max_drawdown_diff = (_get_metric(candidate_metrics, "max_drawdown") -
-                         _get_metric(baseline_metrics, "max_drawdown"))
+    max_drawdown_diff = _get_metric(candidate_metrics, "max_drawdown") - _get_metric(
+        baseline_metrics, "max_drawdown"
+    )
 
     return {
         "p_value": float(p_value),
         "information_ratio": float(information_ratio),
         "net_economic_benefit": float(net_economic_benefit),
         "correlations": correlations,
-        "max_drawdown_diff": float(max_drawdown_diff)
+        "max_drawdown_diff": float(max_drawdown_diff),
     }
+
+
+# to-do: write plotting utils for model backtest performance.
+# plot equity curve, with drawdown subplot (smaller)
+# plot histogram of returns, skew metrics, kurtosis metrics
+# plot correlation matrix of multiple models?
+# Plot multiple backtest results -- could be models/portfolios/optimized/aggregated/etc.
