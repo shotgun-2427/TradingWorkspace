@@ -2,6 +2,7 @@ import dataclasses
 import datetime
 import os
 from dataclasses import dataclass
+from typing import Optional
 
 
 @dataclass
@@ -27,7 +28,7 @@ class Config:
     aggregators: list[str]
     ib_gateway: IBGatewayConfig
     notifications: dict
-    portfolio_optimizers: list[str] | None = None
+    optimizers: Optional[list[str]] = None
 
     def __post_init__(self):
         if isinstance(self.ib_gateway, dict):

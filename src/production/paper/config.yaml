@@ -1,23 +1,21 @@
-start_date: 2004-01-01
+start_date: 2024-01-01
 end_date: 2026-12-31
 universe: [
   TLT-US, IEI-US, SHY-US, BIL-US, SLV-US, GLD-US,
   USO-US, UNG-US, SPY-US, EWJ-US, INDA-US, MCHI-US,
   IBIT-US, ETHA-US, EZU-US, VIXY-US
 ]
-
 model_state_features: [
   close_momentum_10, close_momentum_20, close_momentum_30,
   close_momentum_60, close_momentum_90, close_momentum_120,
   close_momentum_240
 ]
-
 models: [
   TLT_AMMA, IEI_AMMA, SHY_AMMA, BIL_AMMA, SLV_AMMA, GLD_AMMA,
   SPY_AMMA, INDA_AMMA, MCHI_AMMA, IBIT_AMMA, ETHA_AMMA, EZU_AMMA
 ]
 aggregators: [ model_mvo_amma_constrained ]
-portfolio_optimizers: [ miqp_mean_variance ]
+optimizers: [ miqp_mean_variance ]
 
 ib_gateway:
   host: 127.0.0.1

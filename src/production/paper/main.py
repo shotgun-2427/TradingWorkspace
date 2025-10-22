@@ -108,8 +108,6 @@ async def run_trading_engine(config: Config, writer: AsyncGCSWriter, current_dat
         )
     )
 
-    logger.info("start aggreg")
-
     # ==== orchestrate portfolio aggregation
     with timed("production.portfolio_aggregation_duration"):
         aggregated_insights = orchestrate_portfolio_aggregation(
@@ -125,11 +123,8 @@ async def run_trading_engine(config: Config, writer: AsyncGCSWriter, current_dat
         )
     )
 
-    logger.info("end aggreg")
-    logger.info("started optimizer")
-
     # ==== optional: orchestrate asset-level portfolio optimization
-    portfolio_optimizers = getattr(config, "portfolio_optimizers", [])  # optional field
+    portfolio_optimizers = getattr(config, "optimizers", [])  # optional field
     optimized_insights = {}
     if portfolio_optimizers:
         with timed("production.portfolio_optimization_duration"):
@@ -156,8 +151,6 @@ async def run_trading_engine(config: Config, writer: AsyncGCSWriter, current_dat
                 for name, df in optimized_insights.items()
             )
         )
-
-    logger.info("end optim")
 
     # Choose which insights to simulate and return (prefer optimizer if present)
     final_insights = optimized_insights if optimized_insights else aggregated_insights
