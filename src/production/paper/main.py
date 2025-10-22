@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from opentelemetry import trace
@@ -39,7 +39,9 @@ async def setup() -> tuple:
     logger.info(f"Configuration loaded: {config}")
 
     # TODO: Add max(current_date, config.start_date) logic for testing
-    current_date_str = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
+    current_date = datetime.now(ZoneInfo("America/New_York"))
+    current_date_str = current_date.strftime("%Y-%m-%d")
+    optimizer_start_date = (current_date - timedelta(days=365)).strftime("%Y-%m-%d")
 
     # GCS Writer
     gcs_writer = AsyncGCSWriter(
@@ -50,10 +52,10 @@ async def setup() -> tuple:
         f"Using GCS bucket: {gcs_writer.bucket_name}, prefix: {gcs_writer.prefix}"
     )
 
-    return config, current_date_str, gcs_writer
+    return config, current_date_str, gcs_writer, optimizer_start_date
 
 
-async def run_trading_engine(config: Config, writer: AsyncGCSWriter, current_date: str):
+async def run_trading_engine(config: Config, writer: AsyncGCSWriter, current_date: str, optimizer_start_date: str):
     with timed("production.read_data_duration"):
         lf = read_data()
 
@@ -106,6 +108,8 @@ async def run_trading_engine(config: Config, writer: AsyncGCSWriter, current_dat
         )
     )
 
+    logger.info("start aggreg")
+
     # ==== orchestrate portfolio aggregation
     with timed("production.portfolio_aggregation_duration"):
         aggregated_insights = orchestrate_portfolio_aggregation(
@@ -121,6 +125,9 @@ async def run_trading_engine(config: Config, writer: AsyncGCSWriter, current_dat
         )
     )
 
+    logger.info("end aggreg")
+    logger.info("started optimizer")
+
     # ==== optional: orchestrate asset-level portfolio optimization
     portfolio_optimizers = getattr(config, "portfolio_optimizers", [])  # optional field
     optimized_insights = {}
@@ -130,7 +137,6 @@ async def run_trading_engine(config: Config, writer: AsyncGCSWriter, current_dat
             optimizer_prices = prices
             optimizer_aggregated_insights = aggregated_insights
 
-            optimizer_start_date = getattr(config, "optimizer_start_date", None)
             if optimizer_start_date:
                 optimizer_prices = prices.filter(prices["date"] >= optimizer_start_date)
                 optimizer_aggregated_insights = {
@@ -150,6 +156,8 @@ async def run_trading_engine(config: Config, writer: AsyncGCSWriter, current_dat
                 for name, df in optimized_insights.items()
             )
         )
+
+    logger.info("end optim")
 
     # Choose which insights to simulate and return (prefer optimizer if present)
     final_insights = optimized_insights if optimized_insights else aggregated_insights
@@ -173,10 +181,10 @@ async def run_trading_engine(config: Config, writer: AsyncGCSWriter, current_dat
 
 
 async def run_execution_engine(
-    config: Config,
-    writer: AsyncGCSWriter,
-    prices: DataFrame,
-    portfolio_insight: DataFrame,
+        config: Config,
+        writer: AsyncGCSWriter,
+        prices: DataFrame,
+        portfolio_insight: DataFrame,
 ):
     ib_client = await IBKR.create(
         hostname=config.ib_gateway.host,
@@ -223,10 +231,10 @@ async def run_execution_engine(
 async def main():
     logger.info("Starting production pipeline.")
     # ==== setup
-    c, current_date, writer = await setup()
+    c, current_date, writer, optimizer_start_date = await setup()
 
     # ==== trading engine
-    portfolio_insights, prices = await run_trading_engine(c, writer, current_date)
+    portfolio_insights, prices = await run_trading_engine(c, writer, current_date, optimizer_start_date)
 
     # ==== execution engine
     portfolio_name, portfolio_insight = portfolio_insights.popitem()
