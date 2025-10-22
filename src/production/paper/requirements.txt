@@ -10,3 +10,4 @@ opentelemetry-exporter-otlp
 pymsteams
 cvxpy
 scikit-learn
+mosek==11.0.28
