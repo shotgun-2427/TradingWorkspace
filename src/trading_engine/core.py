@@ -27,12 +27,12 @@ def read_data() -> LazyFrame:
 
 
 def create_model_state(
-        lf: LazyFrame,
-        features: list[str],
-        start_date: datetime.date,
-        end_date: datetime.date,
-        universe: List[str],
-        registry=None,
+    lf: LazyFrame,
+    features: list[str],
+    start_date: datetime.date,
+    end_date: datetime.date,
+    universe: List[str],
+    registry=None,
 ) -> tuple[DataFrame, DataFrame]:
     """
     Build model state with warmup lookback and eager feature support.
@@ -103,7 +103,7 @@ def create_model_state(
 
 
 def _build_model_lazy_input(
-        model_state: DataFrame, tickers: List[str], columns: List[str]
+    model_state: DataFrame, tickers: List[str], columns: List[str]
 ) -> pl.LazyFrame:
     cols = ["date", "ticker", *columns]
     return model_state.lazy().filter(pl.col("ticker").is_in(tickers)).select(cols)
@@ -153,11 +153,11 @@ def _max_feature_lookback(features: Sequence[str]) -> int:
 
 
 def orchestrate_model_backtests(
-        model_state: DataFrame,
-        models: List[str],
-        universe: List[str],
-        clamp_bounds: tuple[float, float] = (-1.0, 1.0),
-        registry=MODELS,
+    model_state: DataFrame,
+    models: List[str],
+    universe: List[str],
+    clamp_bounds: tuple[float, float] = (-1.0, 1.0),
+    registry=MODELS,
 ) -> Dict[str, pl.LazyFrame]:
     """
     Run selected models and return per-model LazyFrames padded to the full universe:
@@ -212,15 +212,19 @@ def construct_prices(model_state: DataFrame, universe: List[str]) -> pl.DataFram
 
 
 def orchestrate_model_simulations(
-        prices: DataFrame,
-        model_insights: Dict[str, pl.LazyFrame],
-        initial_value: float = 1_000_000.0,
+    prices: DataFrame,
+    model_insights: Dict[str, pl.LazyFrame],
+    initial_value: float = 1_000_000.0,
+    fee_model: str = "ibkr_pro_fixed",
+    slippage_bps: float = 1.0,
 ) -> Dict[str, dict]:
     """
     Runs all backtests and returns { model_name: backtest_result }.
     No cross-model aggregation/weighting here.
     """
-    backtester = HawkBacktester(initial_value)
+    backtester = HawkBacktester(
+        initial_value, fee_model=fee_model, slippage_bps=slippage_bps
+    )
     results: Dict[str, dict] = {}
 
     for name, lf in model_insights.items():
@@ -264,13 +268,13 @@ def _enforce_l1_budget(lf: pl.LazyFrame, budget: float = 1.0) -> pl.LazyFrame:
 
 
 def orchestrate_portfolio_aggregation(
-        model_insights: Dict[str, pl.LazyFrame],
-        backtest_results: Dict[str, dict],
-        universe: List[str],
-        aggregators: List[str],
-        clamp_bounds: tuple[float, float] = (-1.0, 1.0),
-        l1_budget: float = 1.0,
-        registry=AGGREGATORS,
+    model_insights: Dict[str, pl.LazyFrame],
+    backtest_results: Dict[str, dict],
+    universe: List[str],
+    aggregators: List[str],
+    clamp_bounds: tuple[float, float] = (-1.0, 1.0),
+    l1_budget: float = 1.0,
+    registry=AGGREGATORS,
 ) -> Dict[str, DataFrame]:
     """
     Aggregate model insights into a single portfolio per aggregator.
@@ -300,13 +304,13 @@ def orchestrate_portfolio_aggregation(
 
 
 def orchestrate_portfolio_optimizations(
-        prices: DataFrame,
-        aggregated_insights: Dict[str, DataFrame],
-        universe: List[str],
-        optimizers: List[str],
-        clamp_bounds: tuple[float, float] = (-1.0, 1.0),
-        l1_budget: float = 1.0,
-        registry=OPTIMIZERS,
+    prices: DataFrame,
+    aggregated_insights: Dict[str, DataFrame],
+    universe: List[str],
+    optimizers: List[str],
+    clamp_bounds: tuple[float, float] = (-1.0, 1.0),
+    l1_budget: float = 1.0,
+    registry=OPTIMIZERS,
 ) -> Dict[str, DataFrame]:
     """
     Run asset-level portfolio optimizers on aggregated desired weights.
@@ -341,11 +345,15 @@ def orchestrate_portfolio_optimizations(
 
 
 def orchestrate_portfolio_simulations(
-        prices: DataFrame,
-        portfolio_insights: Dict[str, DataFrame],
-        initial_value: float = 1_000_000.0,
+    prices: DataFrame,
+    portfolio_insights: Dict[str, DataFrame],
+    initial_value: float = 1_000_000.0,
+    fee_model: str = "ibkr_pro_fixed",
+    slippage_bps: float = 1.0,
 ):
-    backtester = HawkBacktester(initial_value)
+    backtester = HawkBacktester(
+        initial_value, fee_model=fee_model, slippage_bps=slippage_bps
+    )
     results: Dict[str, dict] = {}
 
     for name, weights_df in portfolio_insights.items():
@@ -373,17 +381,19 @@ def orchestrate_portfolio_simulations(
 
 
 def run_full_backtest(
-        universe: list[str],
-        features: list[str],
-        models: list[str],
-        aggregators: list[str],
-        optimizers: Optional[list[str]],
-        start_date: datetime.date,
-        end_date: datetime.date,
-        initial_value: int = 1_000_000,
-        model_registry: dict = MODELS,
-        aggregator_registry: dict = AGGREGATORS,
-        portfolio_optimizer_registry: dict = OPTIMIZERS,
+    universe: list[str],
+    features: list[str],
+    models: list[str],
+    aggregators: list[str],
+    optimizers: Optional[list[str]],
+    start_date: datetime.date,
+    end_date: datetime.date,
+    initial_value: int = 1_000_000,
+    fee_model: str = "ibkr_pro_fixed",
+    slippage_bps: float = 1.0,
+    model_registry: dict = MODELS,
+    aggregator_registry: dict = AGGREGATORS,
+    portfolio_optimizer_registry: dict = OPTIMIZERS,
 ):
     """Complete backtest orchestration (models → aggregation → optimization)."""
 
@@ -407,7 +417,11 @@ def run_full_backtest(
 
     # Run model simulations
     model_simulations = orchestrate_model_simulations(
-        prices=prices, model_insights=model_results, initial_value=initial_value
+        prices=prices,
+        model_insights=model_results,
+        initial_value=initial_value,
+        fee_model=fee_model,
+        slippage_bps=slippage_bps,
     )
 
     # Run aggregation
@@ -424,6 +438,8 @@ def run_full_backtest(
         prices=prices,
         portfolio_insights=aggregated_results,
         initial_value=initial_value,
+        fee_model=fee_model,
+        slippage_bps=slippage_bps,
     )
 
     # Optional: run asset-level optimization on top of aggregated weights
@@ -441,6 +457,8 @@ def run_full_backtest(
             prices=prices,
             portfolio_insights=optimizer_results,
             initial_value=initial_value,
+            fee_model=fee_model,
+            slippage_bps=slippage_bps,
         )
 
     return {

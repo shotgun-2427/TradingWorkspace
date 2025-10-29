@@ -15,7 +15,7 @@ models: [
   SPY_AMMA, INDA_AMMA, MCHI_AMMA, IBIT_AMMA, ETHA_AMMA, EZU_AMMA
 ]
 aggregators: [ model_mvo_amma_constrained ]
-optimizers: [ miqp_mean_variance ]
+optimizers: [ mean_variance_constrained ]
 
 ib_gateway:
   host: 127.0.0.1
