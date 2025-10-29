@@ -1,7 +1,5 @@
 from trading_engine.optimizers.catalogue.mean_variance import MeanVarianceOptimizer
-from trading_engine.optimizers.catalogue.miqp_mean_variance import (
-    MIQPMeanVarianceOptimizer,
-)
+from trading_engine.optimizers.catalogue.miqp_mean_variance import MIQPMeanVarianceOptimizer
 from trading_engine.risk.registry import RISK_MODELS
 
 OPTIMIZERS = {
@@ -58,7 +56,8 @@ OPTIMIZERS = {
             lambda_te=0.5,
             risk_model=RISK_MODELS["naive_dcc"]["function"],
             kappa=1.0,
-            min_position_delta=0.03,  # 3% minimum trade size (enforced exactly via MIQP)
+            # 3% minimum trade size (enforced exactly via MIQP)
+            min_position_delta=0.03,
             turnover_lambda=0.1,  # Turnover penalty to reduce transaction costs
             big_m=10.0,  # Big-M constant for MIQP formulation
             asset_weight_bounds={

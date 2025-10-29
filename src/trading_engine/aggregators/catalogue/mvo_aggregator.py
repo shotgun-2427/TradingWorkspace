@@ -1,5 +1,6 @@
 from typing import Callable, Dict, List, Optional, Literal, Tuple
 
+from datetime import datetime
 import numpy as np
 import polars as pl
 from polars import LazyFrame
@@ -162,7 +163,8 @@ def _estimate_mu_eb_sr(
         return np.zeros((M,), dtype=float)
 
     # 1) Winsorize
-    X = _winsorize(window_returns, lower_pct=winsor_pct, upper_pct=1.0 - winsor_pct)
+    X = _winsorize(window_returns, lower_pct=winsor_pct,
+                   upper_pct=1.0 - winsor_pct)
 
     # 2) EWMA mean and volatility
     w_mean = _ewma_weights(T, hl_mean)
@@ -296,6 +298,7 @@ def _rolling_mvo_alphas(
     mu_scale: float = 1.0,
     long_only: bool = False,
     model_weight_bounds: Optional[Dict[str, Dict[str, float]]] = None,
+    rebalance_interval: int = 1,
 ) -> pl.DataFrame:
     """
     Compute per-date model coefficients via rolling MVO.
@@ -307,75 +310,108 @@ def _rolling_mvo_alphas(
     :param turnover_lambda: Non-negative penalty on turnover
     :param kappa: Risk aversion scaling on Σ
     :param model_weight_bounds: Optional dict mapping model_name -> {"min": float, "max": float}
+    :param rebalance_interval: Frequency in trading days (e.g., 1=daily, 5=weekly, 20=monthly)
     :return: DataFrame of alphas with columns ['date', <models...>]
     """
     model_names, ret_mat, dates = _prepare_returns(ret_wide)
     if not model_names:
         return pl.DataFrame({"date": []})
 
-    n_models: int = len(model_names)
-    cov_win: int = int(cov_window_days)
+    n_models = len(model_names)
+    cov_win = int(cov_window_days)
 
-    # Convert weight bounds dictionary to arrays
-    w_min: Optional[np.ndarray] = None
-    w_max: Optional[np.ndarray] = None
+    # Optional weight bounds
+    w_min = w_max = None
     if model_weight_bounds is not None:
         w_min = np.array(
-            [model_weight_bounds.get(m, {}).get("min", -np.inf) for m in model_names],
+            [model_weight_bounds.get(m, {}).get("min", -np.inf)
+             for m in model_names],
             dtype=float,
         )
         w_max = np.array(
-            [model_weight_bounds.get(m, {}).get("max", np.inf) for m in model_names],
+            [model_weight_bounds.get(m, {}).get("max", np.inf)
+             for m in model_names],
             dtype=float,
         )
 
-    alphas: List[List[float]] = []
-    alpha_dates: List[str] = []
+    alphas, alpha_dates = [], []
+    prev_w = None
+    last_opt_w = None
 
-    for i in range(len(dates)):
+    # Determine if "Tuesday rule" applies
+    tuesday_mode = rebalance_interval >= 5
+    week_interval = max(rebalance_interval // 5, 1)  # e.g. 1=weekly, 4=monthly
+    last_rebalanced_week = None
+
+    for i, date_str in enumerate(dates):
         if i + 1 < cov_win:
             # Warmup fallback
             if fallback == "zero":
                 alphas.append([0.0] * n_models)
             else:
                 alphas.append([1.0 / n_models] * n_models)
-            alpha_dates.append(dates[i])
+            alpha_dates.append(date_str)
             continue
 
-        win_cov: np.ndarray = ret_mat[i + 1 - cov_win : i + 1]
-        cov: np.ndarray = risk_model(win_cov)
-        win_mu: np.ndarray = ret_mat[i + 1 - cov_win : i + 1]
-        mu: np.ndarray = _estimate_mu_eb_sr(
-            window_returns=win_mu,
-            hl_mean=hl_mean,
-            hl_vol=hl_vol,
-            winsor_pct=winsor_pct,
-            vol_floor=vol_floor,
-            scale=mu_scale,
-        )
+        # --- Decide whether to rebalance ---
+        rebalance_now = False
+        date_obj = datetime.strptime(date_str, "%Y-%m-%d")
 
-        prev: Optional[np.ndarray] = (
-            np.array(alphas[-1], dtype=float) if alphas else None
-        )
-        w: np.ndarray = _solve_mvo(
-            cov=cov,
-            mu=mu,
-            kappa=kappa,
-            turnover_lambda=turnover_lambda,
-            prev_w=prev,
-            long_only=long_only,
-            w_min=w_min,
-            w_max=w_max,
-        )
+        if not tuesday_mode:
+            # Every N trading days
+            if (i % rebalance_interval == 0) or (last_opt_w is None):
+                rebalance_now = True
+        else:
+            # --- Tuesday-based weekly/monthly rule ---
+            iso_year, iso_week, _ = date_obj.isocalendar()
+
+            # Only consider rebalancing once per week_interval
+            if last_rebalanced_week is None or (iso_week - last_rebalanced_week) >= week_interval:
+                weekday = date_obj.weekday()  # Monday=0, Tuesday=1, ...
+                if weekday == 1:
+                    # Ideal case: it's Tuesday
+                    rebalance_now = True
+                    last_rebalanced_week = iso_week
+                elif weekday > 1 and not any(
+                    datetime.strptime(
+                        d, "%Y-%m-%d").isocalendar()[1] == iso_week
+                    and datetime.strptime(d, "%Y-%m-%d").weekday() == 1
+                    for d in dates[:i]
+                ):
+                    # No Tuesday this week before today → rebalance today (holiday Tuesday)
+                    rebalance_now = True
+                    last_rebalanced_week = iso_week
+
+        # --- Compute or carry forward weights ---
+        if rebalance_now:
+            window = ret_mat[i + 1 - cov_win: i + 1]
+            cov = risk_model(window)
+            mu = _estimate_mu_eb_sr(
+                window, hl_mean, hl_vol, winsor_pct, vol_floor, mu_scale
+            )
+            w_new = _solve_mvo(
+                cov=cov,
+                mu=mu,
+                kappa=kappa,
+                turnover_lambda=turnover_lambda,
+                prev_w=prev_w,
+                long_only=long_only,
+                w_min=w_min,
+                w_max=w_max,
+            )
+            last_opt_w = w_new
+            w = w_new
+        else:
+            w = prev_w if prev_w is not None else np.full(
+                n_models, 1.0 / n_models)
 
         alphas.append(w.tolist())
-        alpha_dates.append(dates[i])
+        alpha_dates.append(date_str)
+        prev_w = w
 
     alpha_df = pl.DataFrame(
-        {
-            "date": alpha_dates,
-            **{m: [row[j] for row in alphas] for j, m in enumerate(model_names)},
-        }
+        {"date": alpha_dates, **{m: [row[j] for row in alphas]
+                                 for j, m in enumerate(model_names)}}
     )
     return alpha_df
 
@@ -431,7 +467,8 @@ def _scale_and_combine_weights(
 
 def MVOAggregator(
     cov_window_days: int = 60,
-    risk_model: Callable[[np.ndarray], np.ndarray] = None,  # type: ignore[assignment]
+    # type: ignore[assignment]
+    risk_model: Callable[[np.ndarray], np.ndarray] = None,
     fallback: Literal["equal", "zero"] = "equal",
     turnover_lambda: float = 0.0,
     kappa: float = 1.0,
@@ -442,6 +479,7 @@ def MVOAggregator(
     mu_scale: float = 1.0,
     long_only: bool = False,
     model_weight_bounds: Optional[Dict[str, Dict[str, float]]] = None,
+    rebalance_interval: int = 1,
 ) -> Callable[[Dict[str, LazyFrame], Dict], LazyFrame]:
     """
     Aggregator that computes model-level mean-variance weights using cross-model
@@ -460,6 +498,7 @@ def MVOAggregator(
     :param long_only: If True, enforce non-negative weights before GMV normalization
     :param model_weight_bounds: Optional dict mapping model_name -> {"min": float, "max": float}
                                 to constrain individual model weights (e.g., {"Model1": {"min": 0.0, "max": 0.3}})
+    :param rebalance_interval: Rebalance frequency in days
     :return: Callable mapping (model_insights, backtest_results) -> LazyFrame of combined weights.
     """
 
@@ -498,6 +537,7 @@ def MVOAggregator(
             mu_scale=mu_scale,
             long_only=long_only,
             model_weight_bounds=model_weight_bounds,
+            rebalance_interval=rebalance_interval,
         )
 
         # 3) Combine per-model ticker weights scaled by alphas(date, model)
