@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime, date, datetime as dt, timedelta
+from datetime import datetime, date, datetime as dt
 from zoneinfo import ZoneInfo
 
 import polars as pl
@@ -34,7 +34,7 @@ async def setup() -> tuple:
     logger.info(f"Configuration loaded: {config}")
 
     # Use current NY date string (your pipeline expects YYYY-MM-DD)
-    current_date_str = (datetime.now(ZoneInfo("America/New_York")) - timedelta(days=1)).strftime("%Y-%m-%d")
+    current_date_str = (datetime.now(ZoneInfo("America/New_York"))).strftime("%Y-%m-%d")
 
     # GCS Writer
     gcs_writer = AsyncGCSWriter(
