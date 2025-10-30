@@ -8,3 +8,4 @@ opentelemetry-sdk
 opentelemetry-exporter-otlp
 cvxpy
 scikit-learn
+mosek==11.0.28
