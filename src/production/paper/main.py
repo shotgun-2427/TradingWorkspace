@@ -182,6 +182,9 @@ async def run_execution_engine(
     ib_client = await IBKR.create(
         hostname=config.ib_gateway.host,
         port=config.ib_gateway.port,
+        flex_web_token=config.ib_gateway.flex_web_token,
+        nav_flex_query_id=config.ib_gateway.nav_flex_query_id,
+        fund_inception_date=config.ib_gateway.fund_inception_date,
         client_id=config.ib_gateway.client_id,
     )
 
@@ -212,6 +215,9 @@ async def run_execution_engine(
         time_in_force="DAY",
         exchange="SMART",
     )
+
+    # ==== save historical NAV report
+    await writer.save_polars(ib_client.get_historical_nav(), "historical_nav.csv")
 
     # ==== write CSV to GCS and return link
     await writer.save_text(

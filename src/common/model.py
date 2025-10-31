@@ -10,6 +10,9 @@ class IBGatewayConfig:
     host: str
     port: int
     client_id: int
+    flex_web_token: int
+    nav_flex_query_id: int
+    fund_inception_date: datetime.date
 
     def __post_init__(self):
         if os.environ.get("IB_HOST"):
