@@ -13,7 +13,8 @@ OPTIMIZERS = {
             risk_model=RISK_MODELS["naive_dcc"]["function"],
             kappa=1.0,
             turnover_lambda=0.1,  # Moderate turnover penalty to reduce transaction costs
-        )
+        ),
+        "lookback": 240,
     },
     "mean_variance_constrained": {
         "function": MeanVarianceOptimizer(
@@ -49,7 +50,8 @@ OPTIMIZERS = {
                 "IBIT-US": {"min": -0.15, "max": 0.2},
                 "ETHA-US": {"min": -0.15, "max": 0.2},
             },
-        )
+        ),
+        "lookback": 240,
     },
     "miqp_mean_variance": {
         "function": MIQPMeanVarianceOptimizer(
@@ -81,6 +83,7 @@ OPTIMIZERS = {
                 "IBIT-US": {"min": -0.15, "max": 0.2},
                 "ETHA-US": {"min": -0.15, "max": 0.2},
             },
-        )
+        ),
+        "lookback": 240,
     },
 }

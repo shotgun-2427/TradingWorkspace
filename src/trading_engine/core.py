@@ -33,10 +33,22 @@ def create_model_state(
     end_date: datetime.date,
     universe: List[str],
     registry=None,
+    total_lookback_days: Optional[int] = None,
 ) -> tuple[DataFrame, DataFrame]:
     """
     Build model state with warmup lookback and eager feature support.
     Returns (model_state, prices) tuple.
+    
+    Args:
+        lf: LazyFrame containing raw data
+        features: List of feature names to compute
+        start_date: Start date for the model state (after warmup)
+        end_date: End date for the model state
+        universe: List of tickers to include
+        registry: Feature registry (defaults to FEATURES)
+        total_lookback_days: Optional total lookback days to extend data before start_date.
+                           If provided, this overrides the calculated feature lookback.
+                           If None, uses the maximum lookback from features.
     """
     if not registry:
         registry = FEATURES
@@ -51,7 +63,11 @@ def create_model_state(
         )
 
     # Filter to the date range + lookback buffer
-    lookback_days = _max_feature_lookback(features)
+    if total_lookback_days is not None:
+        lookback_days = total_lookback_days
+    else:
+        lookback_days = _max_feature_lookback(features)
+    
     lookback_calendar_days = calculate_calendar_lookback(lookback_days)
     buffer_start_date = start_date - datetime.timedelta(days=lookback_calendar_days)
 
@@ -150,6 +166,82 @@ def _pad_to_universe(lf: pl.LazyFrame, universe: List[str]) -> pl.LazyFrame:
 
 def _max_feature_lookback(features: Sequence[str]) -> int:
     return max((FEATURES[f]["lookback"] for f in features), default=0)
+
+
+def calculate_max_lookback(
+    features: Optional[List[str]] = None,
+    models: Optional[List[str]] = None,
+    aggregators: Optional[List[str]] = None,
+    optimizers: Optional[List[str]] = None,
+    feature_registry: dict = FEATURES,
+    model_registry: dict = MODELS,
+    aggregator_registry: dict = AGGREGATORS,
+    optimizer_registry: dict = OPTIMIZERS,
+) -> int:
+    """
+    Calculate the required lookback days for the pipeline.
+    
+    The lookback calculation works as follows:
+    - Features need lookback: raw data BEFORE start_date for feature computation
+    - Aggregators need lookback: model returns BEFORE start_date (which come from model_state)
+    - Optimizers need lookback: price data BEFORE start_date (which come from model_state)
+    
+    Since aggregators and optimizers operate on model_state/prices (which depend on features),
+    but they need historical data BEFORE start_date, we need:
+    - Feature lookback: to compute features properly
+    - Aggregator/Optimizer lookback: additional data BEFORE start_date for their warmup
+    
+    However, model_state is trimmed to start_date onwards, so aggregators/optimizers
+    can't get historical data before start_date. The solution is to take the MAXIMUM:
+    - If aggregator needs 240 days and features need 60 days, we need 240 days total
+    - This ensures we have enough data BEFORE start_date for both features AND
+      for aggregators/optimizers to have sufficient history after start_date
+    
+    Args:
+        features: List of feature names (optional)
+        models: List of model names (optional)
+        aggregators: List of aggregator names (optional)
+        optimizers: List of optimizer names (optional)
+        feature_registry: Feature registry (defaults to FEATURES)
+        model_registry: Model registry (defaults to MODELS)
+        aggregator_registry: Aggregator registry (defaults to AGGREGATORS)
+        optimizer_registry: Optimizer registry (defaults to OPTIMIZERS)
+    
+    Returns:
+        Maximum lookback days across all used components
+    """
+    lookbacks = []
+    
+    # Features lookback: needed for feature computation
+    if features:
+        lookbacks.extend(
+            feature_registry.get(f, {}).get("lookback", 0) for f in features
+        )
+    
+    # Models lookback: models operate on features, so they don't need additional raw data lookback
+    # (Their lookback is typically 0, but we include it for completeness)
+    if models:
+        lookbacks.extend(
+            model_registry.get(m, {}).get("lookback", 0) for m in models
+        )
+    
+    # Aggregators lookback: need historical model returns
+    # Since model_state is trimmed to start_date onwards, aggregators need enough
+    # lookback so that by the time they operate, they have sufficient history.
+    # We take max to ensure we have enough data BEFORE start_date.
+    if aggregators:
+        lookbacks.extend(
+            aggregator_registry.get(a, {}).get("lookback", 0) for a in aggregators
+        )
+    
+    # Optimizers lookback: need historical price data
+    # Similar to aggregators, we take max to ensure sufficient data BEFORE start_date.
+    if optimizers:
+        lookbacks.extend(
+            optimizer_registry.get(o, {}).get("lookback", 0) for o in optimizers
+        )
+    
+    return max(lookbacks, default=0)
 
 
 def orchestrate_model_backtests(
@@ -397,6 +489,17 @@ def run_full_backtest(
 ):
     """Complete backtest orchestration (models → aggregation → optimization)."""
 
+    # Calculate max lookback across all used components
+    total_lookback_days = calculate_max_lookback(
+        features=features,
+        models=models,
+        aggregators=aggregators,
+        optimizers=optimizers,
+        model_registry=model_registry,
+        aggregator_registry=aggregator_registry,
+        optimizer_registry=portfolio_optimizer_registry,
+    )
+
     # Load data and create model state
     lf = read_data()
     model_state, prices = create_model_state(
@@ -405,6 +508,7 @@ def run_full_backtest(
         start_date=start_date,
         end_date=end_date,
         universe=universe,
+        total_lookback_days=total_lookback_days,
     )
 
     # Run models

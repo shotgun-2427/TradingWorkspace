@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from opentelemetry import trace
@@ -11,7 +11,7 @@ from common.interactive_brokers import IBKR
 from common.logging import setup_logger
 from common.model import Config
 from common.otel import setup_otel, flush_otel, timed
-from common.utils import read_config_yaml, post_to_teams
+from common.utils import read_config_yaml
 from production.paper.core import (
     construct_goal_positions,
     construct_rebalance_orders,
@@ -26,6 +26,7 @@ from trading_engine.core import (
     orchestrate_portfolio_simulations,
     orchestrate_portfolio_aggregation,
     orchestrate_portfolio_optimizations,
+    calculate_max_lookback,
 )
 
 logger = setup_logger(__name__)
@@ -41,7 +42,6 @@ async def setup() -> tuple:
     # TODO: Add max(current_date, config.start_date) logic for testing
     current_date = datetime.now(ZoneInfo("America/New_York"))
     current_date_str = current_date.strftime("%Y-%m-%d")
-    optimizer_start_date = (current_date - timedelta(days=365)).strftime("%Y-%m-%d")
 
     # GCS Writer
     gcs_writer = AsyncGCSWriter(
@@ -52,10 +52,10 @@ async def setup() -> tuple:
         f"Using GCS bucket: {gcs_writer.bucket_name}, prefix: {gcs_writer.prefix}"
     )
 
-    return config, current_date_str, gcs_writer, optimizer_start_date
+    return config, current_date_str, gcs_writer
 
 
-async def run_trading_engine(config: Config, writer: AsyncGCSWriter, current_date: str, optimizer_start_date: str):
+async def run_trading_engine(config: Config, writer: AsyncGCSWriter, current_date: str):
     with timed("production.read_data_duration"):
         lf = read_data()
 
@@ -71,12 +71,21 @@ async def run_trading_engine(config: Config, writer: AsyncGCSWriter, current_dat
 
     # ==== create model state
     with timed("production.model_state_duration"):
+        # Calculate max lookback across all used components
+        total_lookback_days = calculate_max_lookback(
+            features=config.model_state_features,
+            models=config.models,
+            aggregators=config.aggregators,
+            optimizers=getattr(config, "optimizers", None),
+        )
+
         model_state, prices = create_model_state(
             lf=lf,
             features=config.model_state_features,
             start_date=config.start_date,
             end_date=config.end_date,
             universe=config.universe,
+            total_lookback_days=total_lookback_days,
         )
     await writer.save_polars(model_state, "model_state.csv")
     await writer.save_polars(prices, "prices.csv")
@@ -128,20 +137,12 @@ async def run_trading_engine(config: Config, writer: AsyncGCSWriter, current_dat
     optimized_insights = {}
     if portfolio_optimizers:
         with timed("production.portfolio_optimization_duration"):
-            # Trim data to optimizer_start_date if configured
-            optimizer_prices = prices
-            optimizer_aggregated_insights = aggregated_insights
-
-            if optimizer_start_date:
-                optimizer_prices = prices.filter(prices["date"] >= optimizer_start_date)
-                optimizer_aggregated_insights = {
-                    name: df.filter(df["date"] >= optimizer_start_date)
-                    for name, df in aggregated_insights.items()
-                }
-
+            # Optimizers use all available prices/insights from start_date onwards.
+            # The lookback calculation ensures sufficient historical data is fetched
+            # before start_date for proper feature computation.
             optimized_insights = orchestrate_portfolio_optimizations(
-                prices=optimizer_prices,
-                aggregated_insights=optimizer_aggregated_insights,
+                prices=prices,
+                aggregated_insights=aggregated_insights,
                 universe=config.universe,
                 optimizers=portfolio_optimizers,
             )
@@ -230,10 +231,10 @@ async def run_execution_engine(
 async def main():
     logger.info("Starting production pipeline.")
     # ==== setup
-    c, current_date, writer, optimizer_start_date = await setup()
+    c, current_date, writer = await setup()
 
     # ==== trading engine
-    portfolio_insights, prices = await run_trading_engine(c, writer, current_date, optimizer_start_date)
+    portfolio_insights, prices = await run_trading_engine(c, writer, current_date)
 
     # ==== execution engine
     portfolio_name, portfolio_insight = portfolio_insights.popitem()
