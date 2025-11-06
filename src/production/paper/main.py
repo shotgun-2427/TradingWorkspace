@@ -11,7 +11,7 @@ from common.interactive_brokers import IBKR
 from common.logging import setup_logger
 from common.model import Config
 from common.otel import setup_otel, flush_otel, timed
-from common.utils import read_config_yaml
+from common.utils import read_config_yaml, post_to_teams
 from production.paper.core import (
     construct_goal_positions,
     construct_rebalance_orders,
