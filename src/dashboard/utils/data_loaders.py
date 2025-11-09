@@ -11,8 +11,8 @@ from io import BytesIO
 
 # Constants
 BUCKET_NAME = "wsb-hc-qasap-bucket-1"
-SIMULATIONS_AUDIT_PREFIX = "hcf/paper/simulations_audit/"
-PRODUCTION_AUDIT_PREFIX = "hcf/paper/production_audit/"
+SIMULATIONS_AUDIT_PREFIX = "hcf/paper/simulations_audit"
+PRODUCTION_AUDIT_PREFIX = "hcf/paper/production_audit"
 
 
 @st.cache_resource
@@ -35,13 +35,18 @@ def get_latest_simulations_audit() -> datetime.date:
     Returns:
         datetime.date: The most recent audit date found in the simulations_audit directory.
     """
-    bucket = get_gcs_bucket()
-    
-    # List all blobs with the prefix and delimiter to get "directory" listing
-    blobs = bucket.list_blobs(prefix=SIMULATIONS_AUDIT_PREFIX)
-    # Get all dates from directory prefixes
-    raw_dates = set(blob.name.split('/')[3] for blob in blobs)
-    return max(datetime.strptime(prefix, '%Y-%m-%d').date() for prefix in raw_dates)
+    latest_date = datetime.today().date()
+    while True:
+        prefix = latest_date.strftime('%Y-%m-%d')
+        csv_blob_path = f"{SIMULATIONS_AUDIT_PREFIX}/{prefix}/config.json"
+
+        bucket = get_gcs_bucket()
+        blob = bucket.blob(csv_blob_path)
+
+        if blob.exists():
+            return latest_date
+
+        latest_date -= pd.Timedelta(days=1)
 
 
 @st.cache_data(ttl=3600)
@@ -52,25 +57,29 @@ def get_latest_production_audit() -> datetime.date:
     Returns:
         datetime.date: The most recent audit date found in the production_audit directory.
     """
-    bucket = get_gcs_bucket()
-    
-    # List all blobs with the prefix and delimiter to get "directory" listing
-    blobs = bucket.list_blobs(prefix=PRODUCTION_AUDIT_PREFIX)
-    
-    raw_dates = set(blob.name.split('/')[3] for blob in blobs)
-    return max(datetime.strptime(prefix, '%Y-%m-%d').date() for prefix in raw_dates)
+    latest_date = datetime.today().date()
+    while True:
+        prefix = latest_date.strftime('%Y-%m-%d')
+        csv_blob_path = f"{PRODUCTION_AUDIT_PREFIX}/{prefix}/config.json"
+
+        bucket = get_gcs_bucket()
+        blob = bucket.blob(csv_blob_path)
+
+        if blob.exists():
+            return latest_date
+
+        latest_date -= pd.Timedelta(days=1)
 
 
-@st.cache_data(ttl=3600)
-def get_production_audit_config() -> dict:
+@st.cache_data
+def _get_production_audit_config_on_day(date: datetime.date) -> dict:
     """
-    Read `config.json` from the latest production audit folder and return its contents as a dictionary.
+    Read `config.json` from a specific production audit folder and return its contents as a dictionary.
 
-    Returns:
-        dict: The contents of `config.json` as a dictionary.
+    Args:
+        date: The date of the production audit to read.
     """
-    latest_date = get_latest_production_audit()
-    config_blob_path = f"{PRODUCTION_AUDIT_PREFIX}{latest_date.strftime('%Y-%m-%d')}/config.json"
+    config_blob_path = f"{PRODUCTION_AUDIT_PREFIX}/{date.strftime('%Y-%m-%d')}/config.json"
 
     bucket = get_gcs_bucket()
     blob = bucket.blob(config_blob_path)
@@ -79,6 +88,16 @@ def get_production_audit_config() -> dict:
     data = json.loads(content)
 
     return data
+
+
+def get_production_audit_config() -> dict:
+    """
+    Read `config.json` from the latest production audit folder and return its contents as a dictionary.
+
+    Returns:
+        dict: The contents of `config.json` as a dictionary.
+    """
+    return _get_production_audit_config_on_day(get_latest_production_audit())
 
 
 def get_production_audit_models() -> list:
@@ -105,7 +124,29 @@ def get_production_audit_optimizers() -> list:
     return get_production_audit_config().get("optimizers", [])
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data
+def _get_model_backtest_on_day(model_name: str, date: datetime.date) -> pd.DataFrame:
+    """
+    Load a model's backtest results CSV from a specific production audit into a
+    pandas DataFrame.
+
+    The CSV path format is:
+        hcf/paper/production_audit/YYYY-MM-DD/model_backtests_{model_name}_backtest_results.csv
+    """
+    csv_blob_path = (
+        f"{PRODUCTION_AUDIT_PREFIX}/{date.strftime('%Y-%m-%d')}/"
+        f"model_backtests_{model_name}_backtest_results.csv"
+    )
+
+    bucket = get_gcs_bucket()
+    blob = bucket.blob(csv_blob_path)
+
+    data_bytes = blob.download_as_bytes()
+    df = pd.read_csv(BytesIO(data_bytes))
+
+    return df
+
+
 def get_model_backtest(model_name: str) -> pd.DataFrame:
     """
     Load a model's backtest results CSV from the latest production audit into a
@@ -120,10 +161,21 @@ def get_model_backtest(model_name: str) -> pd.DataFrame:
     Returns:
         pd.DataFrame: The backtest results as a pandas DataFrame.
     """
-    latest_date = get_latest_production_audit()
+    return _get_model_backtest_on_day(model_name, get_latest_production_audit())
+
+
+@st.cache_data
+def _get_portfolio_backtest_on_day(optimizer_name: str, date: datetime.date) -> pd.DataFrame:
+    """
+    Load a portfolio backtest CSV for the given optimizer from a specific
+    production audit into a pandas DataFrame.
+
+    The CSV path format is:
+        hcf/paper/production_audit/YYYY-MM-DD/portfolio_backtests_{optimizer_name}_backtest_results.csv
+    """
     csv_blob_path = (
-        f"{PRODUCTION_AUDIT_PREFIX}{latest_date.strftime('%Y-%m-%d')}/"
-        f"model_backtests_{model_name}_backtest_results.csv"
+        f"{PRODUCTION_AUDIT_PREFIX}/{date.strftime('%Y-%m-%d')}/"
+        f"portfolio_backtests_{optimizer_name}_backtest_results.csv"
     )
 
     bucket = get_gcs_bucket()
@@ -135,7 +187,6 @@ def get_model_backtest(model_name: str) -> pd.DataFrame:
     return df
 
 
-@st.cache_data(ttl=3600)
 def get_portfolio_backtest(optimizer_name: str) -> pd.DataFrame:
     """
     Load a portfolio backtest CSV for the given optimizer from the latest
@@ -150,16 +201,4 @@ def get_portfolio_backtest(optimizer_name: str) -> pd.DataFrame:
     Returns:
         pd.DataFrame: The backtest results as a pandas DataFrame.
     """
-    latest_date = get_latest_production_audit()
-    csv_blob_path = (
-        f"{PRODUCTION_AUDIT_PREFIX}{latest_date.strftime('%Y-%m-%d')}/"
-        f"portfolio_backtests_{optimizer_name}_backtest_results.csv"
-    )
-
-    bucket = get_gcs_bucket()
-    blob = bucket.blob(csv_blob_path)
-
-    data_bytes = blob.download_as_bytes()
-    df = pd.read_csv(BytesIO(data_bytes))
-
-    return df
+    return _get_portfolio_backtest_on_day(optimizer_name, get_latest_production_audit())
