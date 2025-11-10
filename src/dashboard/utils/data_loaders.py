@@ -202,3 +202,80 @@ def get_portfolio_backtest(optimizer_name: str) -> pd.DataFrame:
         pd.DataFrame: The backtest results as a pandas DataFrame.
     """
     return _get_portfolio_backtest_on_day(optimizer_name, get_latest_production_audit())
+
+
+@st.cache_data
+def _get_model_backtest_metrics_on_day(model_name: str, date: datetime.date) -> pd.DataFrame:
+    """
+    Load an individual model's backtest metrics CSV from a specific production audit into a
+    pandas DataFrame.
+
+    The CSV path format is:
+        hcf/paper/production_audit/YYYY-MM-DD/model_backtests_{model_name}_backtest_metrics.csv
+    """
+    csv_blob_path = (
+        f"{PRODUCTION_AUDIT_PREFIX}/{date.strftime('%Y-%m-%d')}/"
+        f"model_backtests_{model_name}_backtest_metrics.csv"
+    )
+
+    bucket = get_gcs_bucket()
+    blob = bucket.blob(csv_blob_path)
+
+    data_bytes = blob.download_as_bytes()
+    df = pd.read_csv(BytesIO(data_bytes))
+
+    return df
+
+
+def get_model_backtest_metrics(model_name: str) -> pd.DataFrame:
+    """
+    Load an individual model's backtest metrics CSV from the latest production audit into a
+    pandas DataFrame.
+
+    The CSV path format is:
+        hcf/paper/production_audit/YYYY-MM-DD/model_backtests_{model_name}_backtest_metrics.csv
+
+    Args:
+        model_name: Name of the model to load (used in the filename).
+
+    Returns:
+        pd.DataFrame: The backtest metrics as a pandas DataFrame with columns 'metric' and 'value'.
+    """
+    return _get_model_backtest_metrics_on_day(model_name, get_latest_production_audit())
+
+
+@st.cache_data
+def _get_portfolio_backtest_metrics_on_day(optimizer_name: str, date: datetime.date) -> pd.DataFrame:
+    """
+    Load portfolio backtest metrics CSV for the given optimizer from a specific
+    production audit day into a pandas DataFrame.
+
+    The CSV path format is:
+        hcf/paper/production_audit/YYYY-MM-DD/portfolio_backtests_{optimizer_name}_backtest_metrics.csv
+    """
+    csv_blob_path = (
+        f"{PRODUCTION_AUDIT_PREFIX}/{date.strftime('%Y-%m-%d')}/"
+        f"portfolio_backtests_{optimizer_name}_backtest_metrics.csv"
+    )
+
+    bucket = get_gcs_bucket()
+    blob = bucket.blob(csv_blob_path)
+
+    data_bytes = blob.download_as_bytes()
+    df = pd.read_csv(BytesIO(data_bytes))
+
+    return df
+
+
+def get_portfolio_backtest_metrics(optimizer_name: str) -> pd.DataFrame:
+    """
+    Portfolio backtest metrics (CSV path format is):
+        hcf/paper/production_audit/YYYY-MM-DD/portfolio_backtests_{optimizer_name}_backtest_metrics.csv
+
+    Args:
+        optimizer_name: Name of the optimizer to load (used in the filename).
+
+    Returns:
+        pd.DataFrame: backtest metrics pandas DataFrame with cols: 'metric' and 'value'
+    """
+    return _get_portfolio_backtest_metrics_on_day(optimizer_name, get_latest_production_audit())
