@@ -20,3 +20,5 @@
       docker compose up     # first run builds the image (~2-3 min)
       ```
    3. Open http://0.0.0.1:8501/ 
+
+> To run outside of docker, run `python3 -m streamlit run ./src/dashboard/streamlit_entrypoint.py --server.port=8501 --server.address=0.0.0.0` from the root of the repo. Make sure your GCP credentials are exported as mentioned above.

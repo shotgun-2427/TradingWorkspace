@@ -8,6 +8,7 @@ def main():
         "Navigation",
         (
             "Backtests",
+            "Paper Portfolio",
         ),
     )
 
@@ -15,6 +16,10 @@ def main():
         from src.dashboard.screens import backtest_charts
 
         backtest_charts.app()
+    elif page == "Paper Portfolio":
+        from src.dashboard.screens import paper_performance
+
+        paper_performance.app()
 
 
 if __name__ == "__main__":

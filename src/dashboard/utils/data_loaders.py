@@ -7,6 +7,7 @@ from google.cloud import storage
 import streamlit as st
 import pandas as pd
 from io import BytesIO
+import yfinance as yf
 
 
 # Constants
@@ -279,3 +280,66 @@ def get_portfolio_backtest_metrics(optimizer_name: str) -> pd.DataFrame:
         pd.DataFrame: backtest metrics pandas DataFrame with cols: 'metric' and 'value'
     """
     return _get_portfolio_backtest_metrics_on_day(optimizer_name, get_latest_production_audit())
+
+
+@st.cache_data
+def _get_historical_nav_on_day(date: datetime.date) -> pd.DataFrame:
+    """
+    Load historical NAV data from a specific production audit into a pandas DataFrame.
+
+    The CSV path format is:
+        hcf/paper/production_audit/YYYY-MM-DD/historical_nav.csv
+    """
+    csv_blob_path = (
+        f"{PRODUCTION_AUDIT_PREFIX}/{date.strftime('%Y-%m-%d')}/"
+        f"historical_nav.csv"
+    )
+
+    bucket = get_gcs_bucket()
+    blob = bucket.blob(csv_blob_path)
+
+    data_bytes = blob.download_as_bytes()
+    df = pd.read_csv(BytesIO(data_bytes))
+
+    return df
+
+
+def get_historical_nav() -> pd.DataFrame:
+    """
+    Load historical NAV data from the latest production audit into a pandas DataFrame.
+
+    The CSV path format is:
+        hcf/paper/production_audit/YYYY-MM-DD/historical_nav.csv
+    
+    Returns:
+        pd.DataFrame: Has two columns, date (YYYY-MM-DD) and nav (float).
+    """
+    return _get_historical_nav_on_day(get_latest_production_audit())
+
+@st.cache_data
+def get_spx_prices_from_date(start_date: datetime.date) -> pd.DataFrame:
+    """
+    Load historical SPX prices from a specific start date to today.
+
+    Args:
+        start_date: The start date as a datetime.date object.
+    Returns:
+        pd.DataFrame: DataFrame with columns 'date' and 'close'.
+    """
+    # Initialize ticker object
+    spx = yf.Ticker("^GSPC")
+
+    # Fetch historical data
+    data = spx.history(start=start_date, end=datetime.today().date())
+
+    # Reset index to make the date a column
+    data = data.reset_index()
+
+    # Keep only the relevant columns
+    data = data[["Date", "Close"]].rename(columns={"Date": "date", "Close": "close"})
+
+    # Ensure proper dtypes
+    data["date"] = pd.to_datetime(data["date"])
+    data["date"] = data["date"].dt.tz_localize(None)
+    data["close"] = pd.to_numeric(data["close"], errors="coerce")
+    return data

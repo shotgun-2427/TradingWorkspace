@@ -10,6 +10,7 @@ from src.dashboard.utils import (
     get_production_audit_optimizers,
     get_model_backtest,
     get_portfolio_backtest,
+    get_spx_prices_from_date
 )
 
 
@@ -143,6 +144,13 @@ def app():
             key="end_date"
         )
 
+    # Option to overlay SPX (S&P 500) equity curve normalized to start at 1
+    show_spx = st.checkbox(
+        "Show SPX comparison (S&P 500)",
+        value=True,
+        key="show_spx"
+    )
+
     # Build and plot combined equity curves for selected models and optimizers
     combined_series = {}
     metrics_data = {}  # Store metrics for table display
@@ -214,6 +222,33 @@ def app():
             metrics_data[opt] = metrics
         except Exception as exc:
             st.warning(f"Could not calculate metrics for optimizer '{opt}': {exc}")
+
+    # If requested, fetch SPX prices and add its normalized equity series
+    if show_spx:
+        try:
+            # get_spx_prices_from_date expects a start date (datetime.date)
+            d = start_date
+            spx_df = get_spx_prices_from_date(d)
+            spx_df = spx_df.copy()
+            spx_df['date'] = pd.to_datetime(spx_df['date'])
+
+            # Filter to user selected date range
+            mask = (spx_df['date'].dt.date >= start_date) & (spx_df['date'].dt.date <= end_date)
+            spx_filtered = spx_df[mask]
+
+            if len(spx_filtered) == 0:
+                st.warning("No SPX data available for the selected date range")
+            else:
+                # Compute cumulative returns (equity) from SPX adjusted close prices
+                spx_prices = spx_filtered.set_index('date')['close'].sort_index()
+                # daily pct change, fill first NaN as 0 (no return), then cumulative product to get equity
+                spx_returns = spx_prices.pct_change().fillna(0)
+                spx_equity = (1 + spx_returns).cumprod().rename('SPX')
+                combined_series['SPX'] = spx_equity
+        except Exception as exc:
+            st.warning(f"Could not fetch SPX data: {exc}")
+            import traceback
+            print(traceback.format_exc())
 
     if combined_series:
         combined = pd.concat(combined_series.values(), axis=1)
