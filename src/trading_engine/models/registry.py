@@ -15,6 +15,7 @@ MODELS = {
             momentum_column="close_momentum_10",
             inverse=False,
         ),
+        "lookback": 0,
     },
     "GLD_USO_nml_10": {
         "tickers": ["GLD-US", "USO-US"],
@@ -25,6 +26,7 @@ MODELS = {
             momentum_column="close_momentum_10",
             inverse=True,
         ),
+        "lookback": 0,
     },
     "IXJ_USO_pml_10": {
         "tickers": ["IXJ-US", "USO-US"],
@@ -35,6 +37,7 @@ MODELS = {
             momentum_column="close_momentum_10",
             inverse=False,
         ),
+        "lookback": 0,
     },
     "TLT_IXC_nml_10": {
         "tickers": ["TLT-US", "IXC-US"],
@@ -45,6 +48,7 @@ MODELS = {
             momentum_column="close_momentum_10",
             inverse=True,
         ),
+        "lookback": 0,
     },
     "IXJ_KXI_pml_10": {
         "tickers": ["IXJ-US", "KXI-US"],
@@ -55,6 +59,7 @@ MODELS = {
             momentum_column="close_momentum_10",
             inverse=False,
         ),
+        "lookback": 0,
     },
     "etf_mr_gld_10_0.1": {
         "tickers": ["GLD-US"],
@@ -62,6 +67,7 @@ MODELS = {
         "function": InverseMomentumMeanReversionModel(
             tickers=["GLD-US"], momentum_column="close_momentum_10", threshold=0.1
         ),
+        "lookback": 0,
     },
     "etf_mr_gld_60_0.1": {
         "tickers": ["GLD-US"],
@@ -69,6 +75,7 @@ MODELS = {
         "function": InverseMomentumMeanReversionModel(
             tickers=["GLD-US"], momentum_column="close_momentum_60", threshold=0.1
         ),
+        "lookback": 0,
     },
     "etf_mr_ixn_10_0.1": {
         "tickers": ["IXN-US"],
@@ -76,6 +83,7 @@ MODELS = {
         "function": InverseMomentumMeanReversionModel(
             tickers=["IXN-US"], momentum_column="close_momentum_10", threshold=0.1
         ),
+        "lookback": 0,
     },
     "etf_mr_jxi_60_0.001": {
         "tickers": ["JXI-US"],
@@ -83,6 +91,7 @@ MODELS = {
         "function": InverseMomentumMeanReversionModel(
             tickers=["JXI-US"], momentum_column="close_momentum_60", threshold=0.001
         ),
+        "lookback": 0,
     },
     "etf_mr_jxi_240_0.05": {
         "tickers": ["JXI-US"],
@@ -90,6 +99,7 @@ MODELS = {
         "function": InverseMomentumMeanReversionModel(
             tickers=["JXI-US"], momentum_column="close_momentum_240", threshold=0.05
         ),
+        "lookback": 0,
     },
     "etf_mr_jxi_240_0.01": {
         "tickers": ["JXI-US"],
@@ -97,6 +107,7 @@ MODELS = {
         "function": InverseMomentumMeanReversionModel(
             tickers=["JXI-US"], momentum_column="close_momentum_240", threshold=0.01
         ),
+        "lookback": 0,
     },
     "etf_mr_jxi_240_0.001": {
         "tickers": ["JXI-US"],
@@ -104,6 +115,7 @@ MODELS = {
         "function": InverseMomentumMeanReversionModel(
             tickers=["JXI-US"], momentum_column="close_momentum_240", threshold=0.001
         ),
+        "lookback": 0,
     },
     "etf_mr_jxi_240_0.005": {
         "tickers": ["JXI-US"],
@@ -111,6 +123,7 @@ MODELS = {
         "function": InverseMomentumMeanReversionModel(
             tickers=["JXI-US"], momentum_column="close_momentum_240", threshold=0.005
         ),
+        "lookback": 0,
     },
     "natr_7_14": {
         "tickers": ["IXN-US"],
@@ -124,6 +137,7 @@ MODELS = {
             "close_momentum_64",
         ],
         "function": NATRMeanReversionModel(trade_ticker="IXN-US"),
+        "lookback": 0,
     },
     "TLT_AMMA": {
         "tickers": ["TLT-US"],
@@ -148,6 +162,7 @@ MODELS = {
                 240: 0.187,
             },
         ),
+        "lookback": 0,
     },
     "IEI_AMMA": {
         "tickers": ["IEI-US"],
@@ -172,6 +187,7 @@ MODELS = {
                 240: 0.226,
             },
         ),
+        "lookback": 0,
     },
     "SHY_AMMA": {
         "tickers": ["SHY-US"],
@@ -196,6 +212,7 @@ MODELS = {
                 240: 0.6169,
             },
         ),
+        "lookback": 0,
     },
     "BIL_AMMA": {
         "tickers": ["BIL-US"],
@@ -220,6 +237,7 @@ MODELS = {
                 240: 0.4,
             },
         ),
+        "lookback": 0,
     },
     "SLV_AMMA": {
         "tickers": ["SLV-US"],
@@ -244,6 +262,7 @@ MODELS = {
                 240: 0.34,
             },
         ),
+        "lookback": 0,
     },
     "GLD_AMMA": {
         "tickers": ["GLD-US"],
@@ -268,6 +287,7 @@ MODELS = {
                 240: 0,
             },
         ),
+        "lookback": 0,
     },
     "USO_AMMA": {
         "tickers": ["USO-US"],
@@ -284,6 +304,7 @@ MODELS = {
             ticker="USO-US",
             momentum_weights={10: 0, 20: 0.61, 30: 0, 60: 0.39, 90: 0, 120: 0, 240: 0},
         ),
+        "lookback": 0,
     },
     "UNG_AMMA": {
         "tickers": ["UNG-US"],
@@ -308,6 +329,7 @@ MODELS = {
                 240: 0.28,
             },
         ),
+        "lookback": 0,
     },
     "SPY_AMMA": {
         "tickers": ["SPY-US"],
@@ -332,6 +354,7 @@ MODELS = {
                 240: 0.01111538,
             },
         ),
+        "lookback": 0,
     },
     "EWJ_AMMA": {
         "tickers": ["EWJ-US"],
@@ -356,6 +379,7 @@ MODELS = {
                 240: 0.1567,
             },
         ),
+        "lookback": 0,
     },
     "INDA_AMMA": {
         "tickers": ["INDA-US"],
@@ -380,6 +404,7 @@ MODELS = {
                 240: 0.1,
             },
         ),
+        "lookback": 0,
     },
     "MCHI_AMMA": {
         "tickers": ["MCHI-US"],
@@ -404,6 +429,7 @@ MODELS = {
                 240: 0.25,
             },
         ),
+        "lookback": 0,
     },
     "EZU_AMMA": {
         "tickers": ["EZU-US"],
@@ -428,6 +454,7 @@ MODELS = {
                 240: 0,
             },
         ),
+        "lookback": 0,
     },
     "VIXY_AMMA": {
         "tickers": ["VIXY-US"],
@@ -444,6 +471,7 @@ MODELS = {
             ticker="VIXY-US",
             momentum_weights={10: 0, 20: 0, 30: 0, 60: 1, 90: 0, 120: 0, 240: 0},
         ),
+        "lookback": 0,
     },
     "IBIT_AMMA": {
         "tickers": ["IBIT-US"],
@@ -468,6 +496,7 @@ MODELS = {
                 240: 0.045,
             },
         ),
+        "lookback": 0,
     },
     "ETHA_AMMA": {
         "tickers": ["ETHA-US"],
@@ -492,5 +521,6 @@ MODELS = {
                 240: 0.062,
             },
         ),
+        "lookback": 0,
     },
 }

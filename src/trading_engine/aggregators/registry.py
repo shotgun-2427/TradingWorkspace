@@ -27,7 +27,8 @@ AGGREGATORS = {
             vol_floor=1e-4,
             mu_scale=1.0,
             long_only=True,
-        )
+        ),
+        "lookback": 240,
     },
     "model_mvo_amma_constrained": {
         "function": MVOAggregator(
@@ -69,7 +70,8 @@ AGGREGATORS = {
                 "IBIT_AMMA": {"min": 0.0, "max": 0.10},  # Bitcoin ETF
                 "ETHA_AMMA": {"min": 0.0, "max": 0.08},  # Ethereum ETF
             },
-        )
+        ),
+        "lookback": 240,
     },
     "model_mvo_amma_constrained_two_day": {
         "function": MVOAggregator(
@@ -112,7 +114,8 @@ AGGREGATORS = {
                 "ETHA_AMMA": {"min": 0.0, "max": 0.08},  # Ethereum ETF
             },
             rebalance_interval=2,  # Rebalance every 2 trading days
-        )
+        ),
+        "lookback": 240,
     },
     "model_mvo_amma_constrained_weekly": {
         "function": MVOAggregator(
@@ -155,7 +158,8 @@ AGGREGATORS = {
                 "ETHA_AMMA": {"min": 0.0, "max": 0.08},  # Ethereum ETF
             },
             rebalance_interval=5,  # Rebalance every 5 trading days (weekly)
-        )
+        ),
+        "lookback": 240,
     },
-    "equal_weight": {"function": EqualWeightAggregator()},
+    "equal_weight": {"function": EqualWeightAggregator(), "lookback": 0},
 }
