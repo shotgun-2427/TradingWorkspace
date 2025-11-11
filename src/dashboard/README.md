@@ -16,7 +16,7 @@
       ```
    2. Run Dashboard:
       ```
-      cd src/research       # contains docker-compose.yml
+      cd src/dashboard       # contains docker-compose.yml
       docker compose up     # first run builds the image (~2-3 min)
       ```
    3. Open http://0.0.0.1:8501/ 
