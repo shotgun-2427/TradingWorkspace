@@ -88,15 +88,7 @@ def create_model_state(
     for feature_fn in eager_fns:
         out = feature_fn(out)
 
-    # Trim warmup and finalize
-    model_state = (
-        out.filter(
-            (pl.col("date") >= pl.lit(start_date))
-            & (pl.col("date") <= pl.lit(end_date))
-        )
-        .sort(["ticker", "date"])
-        .rechunk()
-    )
+    model_state = out
 
     # For assets with sparse history, fill only close prices to avoid gaps
     # Forward-fill within ticker, then backfill earliest with first observed price
@@ -306,18 +298,36 @@ def construct_prices(model_state: DataFrame, universe: List[str]) -> pl.DataFram
 def orchestrate_model_simulations(
     prices: DataFrame,
     model_insights: Dict[str, pl.LazyFrame],
+    start_date: datetime.date,
+    end_date: datetime.date,
     initial_value: float = 1_000_000.0,
     fee_model: str = "ibkr_pro_fixed",
     slippage_bps: float = 1.0,
 ) -> Dict[str, dict]:
     """
-    Runs all backtests and returns { model_name: backtest_result }.
+    Runs all backtests and returns { model_name: {"full_backtest_results": dict, "backtest_results": dict} }.
     No cross-model aggregation/weighting here.
+
+    Runs TWO backtests per model:
+    1. Full backtest (with lookback): data needed by aggregators for warmup
+    2. Trimmed backtest [start_date, end_date]: canonical accurate results
+
+    Returns:
+        Dict[str, dict] where each model has:
+        - "full_backtest_results": backtest dict with lookback data (for aggregators only)
+        - "backtest_results": canonical backtest dict [start_date, end_date] (for storage/analysis)
     """
     backtester = HawkBacktester(
         initial_value, fee_model=fee_model, slippage_bps=slippage_bps
     )
     results: Dict[str, dict] = {}
+
+    # Trim prices for accurate metrics
+    start_str = start_date.strftime("%Y-%m-%d")
+    end_str = end_date.strftime("%Y-%m-%d")
+    trimmed_prices = prices.filter(
+        (pl.col("date") >= start_str) & (pl.col("date") <= end_str)
+    )
 
     for name, lf in model_insights.items():
         weights = lf.collect()
@@ -334,11 +344,28 @@ def orchestrate_model_simulations(
             weights = weights.select(["date", *price_cols]).fill_null(0.0)
 
         # Align to full price date range (fill missing dates with 0.0 weights)
-        weights = (
+        full_backtest_weights = (
             prices.select("date").join(weights, on="date", how="left").fill_null(0.0)
         )
 
-        results[name] = backtester.run(prices, weights)
+        # Run FULL backtest for aggregator warmup
+        full_backtest_results = backtester.run(prices, full_backtest_weights)
+
+        # Align trimmed weights to trimmed price date range
+        trimmed_backtest_weights = (
+            trimmed_prices.select("date").join(weights, on="date", how="left").fill_null(0.0)
+        )
+
+        # Run TRIMMED backtest for accurate metrics
+        backtest_results = backtester.run(trimmed_prices, trimmed_backtest_weights)
+
+        # Store both results:
+        # - full_backtest_results: for aggregators (includes lookback data)
+        # - backtest_results: canonical results (starts fresh at start_date)
+        results[name] = {
+            "full_backtest_results": full_backtest_results,
+            "backtest_results": backtest_results,
+        }
 
     return results
 
@@ -364,6 +391,8 @@ def orchestrate_portfolio_aggregation(
     backtest_results: Dict[str, dict],
     universe: List[str],
     aggregators: List[str],
+    start_date: datetime.date,
+    end_date: datetime.date,
     clamp_bounds: tuple[float, float] = (-1.0, 1.0),
     l1_budget: float = 1.0,
     registry=AGGREGATORS,
@@ -373,7 +402,14 @@ def orchestrate_portfolio_aggregation(
     Returns { aggregator_name: wide DataFrame of weights }.
 
     Post-processing (padding, float coercion, clamping, L1 budget) happens here.
+    If start_date/end_date are provided, skips the aggregator lookback warmup rows.
     """
+    # Extract full_backtest_results from backtest_results for aggregators (they need full history)
+    full_backtest_results = {
+        model_name: results["full_backtest_results"]
+        for model_name, results in backtest_results.items()
+    }
+
     results: Dict[str, DataFrame] = {}
     for name in aggregators:
         if name not in registry:
@@ -382,7 +418,9 @@ def orchestrate_portfolio_aggregation(
         aggregator_fn = registry[name][
             "function"
         ]  # Callable[[Dict[str, LF], Dict], LF]
-        raw = aggregator_fn(model_insights, backtest_results)  # LazyFrame or DataFrame
+        aggregator_lookback = registry[name].get("lookback", 0)
+
+        raw = aggregator_fn(model_insights, full_backtest_results)  # LazyFrame or DataFrame
 
         lf = _ensure_lazy(raw)
         lf = _coerce_weights_to_float(lf)
@@ -390,7 +428,17 @@ def orchestrate_portfolio_aggregation(
         lf = _clamp_weights(lf, *clamp_bounds)
         lf = _enforce_l1_budget(lf, budget=l1_budget)
 
-        results[name] = lf.collect()
+        # Collect to get the dataframe
+        df = lf.collect()
+
+        # Skip warmup rows based on aggregator lookback
+        # The aggregator produces weights for all dates, but the first `lookback` rows
+        # are warmup period. We skip those to align output with start_date.
+        if aggregator_lookback > 0 and len(df) > aggregator_lookback:
+            # Skip the first `aggregator_lookback + 1` rows (off-by-one: we need lookback days BEFORE start)
+            df = df.slice(aggregator_lookback + 1)
+
+        results[name] = df
 
     return results
 
@@ -439,10 +487,23 @@ def orchestrate_portfolio_optimizations(
 def orchestrate_portfolio_simulations(
     prices: DataFrame,
     portfolio_insights: Dict[str, DataFrame],
+    start_date: datetime.date,
+    end_date: datetime.date,
     initial_value: float = 1_000_000.0,
     fee_model: str = "ibkr_pro_fixed",
     slippage_bps: float = 1.0,
 ):
+    """
+    Run backtests on portfolio weights.
+    Filters prices to [start_date, end_date] to ensure backtest only runs on the desired date range.
+    """
+    # Trim prices to exact backtest date range
+    start_str = start_date.strftime("%Y-%m-%d")
+    end_str = end_date.strftime("%Y-%m-%d")
+    trimmed_prices = prices.filter(
+        (pl.col("date") >= start_str) & (pl.col("date") <= end_str)
+    )
+
     backtester = HawkBacktester(
         initial_value, fee_model=fee_model, slippage_bps=slippage_bps
     )
@@ -454,7 +515,7 @@ def orchestrate_portfolio_simulations(
         if weights.schema.get("date") != pl.String:
             weights = weights.with_columns(pl.col("date").cast(pl.String))
 
-        price_cols = [c for c in prices.columns if c != "date"]
+        price_cols = [c for c in trimmed_prices.columns if c != "date"]
         if set(price_cols) != set(weights.columns) - {"date"}:
             # Add missing as 0.0, drop extras, enforce order
             missing = [c for c in price_cols if c not in weights.columns]
@@ -462,12 +523,12 @@ def orchestrate_portfolio_simulations(
                 weights = weights.with_columns([pl.lit(0.0).alias(c) for c in missing])
             weights = weights.select(["date", *price_cols]).fill_null(0.0)
 
-        # Align to full price date range (fill missing dates with 0.0 weights)
+        # Align to trimmed price date range (fill missing dates with 0.0 weights)
         weights = (
-            prices.select("date").join(weights, on="date", how="left").fill_null(0.0)
+            trimmed_prices.select("date").join(weights, on="date", how="left").fill_null(0.0)
         )
 
-        results[name] = backtester.run(prices, weights)
+        results[name] = backtester.run(trimmed_prices, weights)
 
     return results
 
@@ -519,10 +580,12 @@ def run_full_backtest(
         registry=model_registry,
     )
 
-    # Run model simulations
+    # Run model simulations (uses full prices for aggregator warmup)
     model_simulations = orchestrate_model_simulations(
         prices=prices,
         model_insights=model_results,
+        start_date=start_date,
+        end_date=end_date,
         initial_value=initial_value,
         fee_model=fee_model,
         slippage_bps=slippage_bps,
@@ -534,6 +597,8 @@ def run_full_backtest(
         backtest_results=model_simulations,
         universe=universe,
         aggregators=aggregators,
+        start_date=start_date,
+        end_date=end_date,
         registry=aggregator_registry,
     )
 
@@ -541,6 +606,8 @@ def run_full_backtest(
     aggregation_simulations = orchestrate_portfolio_simulations(
         prices=prices,
         portfolio_insights=aggregated_results,
+        start_date=start_date,
+        end_date=end_date,
         initial_value=initial_value,
         fee_model=fee_model,
         slippage_bps=slippage_bps,
@@ -560,6 +627,8 @@ def run_full_backtest(
         optimizer_simulations = orchestrate_portfolio_simulations(
             prices=prices,
             portfolio_insights=optimizer_results,
+            start_date=start_date,
+            end_date=end_date,
             initial_value=initial_value,
             fee_model=fee_model,
             slippage_bps=slippage_bps,

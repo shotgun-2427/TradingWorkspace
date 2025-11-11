@@ -107,13 +107,17 @@ async def run_trading_engine(config: Config, writer: AsyncGCSWriter, current_dat
         model_backtests = orchestrate_model_simulations(
             prices=prices,
             model_insights=model_insights,
+            start_date=config.start_date,
+            end_date=config.end_date,
             initial_value=500_000.0,
         )
+
+    # Save canonical backtest results to GCS (accurate backtest starting from start_date)
     await asyncio.gather(
         *(
             writer.save_polars(df, f"model_backtests_{model}_{kind}.csv")
             for model, results in model_backtests.items()
-            for kind, df in results.items()
+            for kind, df in results["backtest_results"].items()
         )
     )
 
@@ -124,6 +128,8 @@ async def run_trading_engine(config: Config, writer: AsyncGCSWriter, current_dat
             backtest_results=model_backtests,
             universe=config.universe,
             aggregators=config.aggregators,
+            start_date=config.start_date,
+            end_date=config.end_date,
         )
     await asyncio.gather(
         *(
@@ -161,6 +167,8 @@ async def run_trading_engine(config: Config, writer: AsyncGCSWriter, current_dat
         portfolio_backtests = orchestrate_portfolio_simulations(
             prices=prices,
             portfolio_insights=final_insights,
+            start_date=config.start_date,
+            end_date=config.end_date,
             initial_value=1_000_000.0,
         )
     await asyncio.gather(
@@ -266,8 +274,9 @@ async def main():
         )
 
     logger.info(message)
+    
     post_to_teams(webhook_url=c.notifications["msteams_webhook"], message=message)
-
+    
 
 if __name__ == "__main__":
     setup_otel("production_paper")
