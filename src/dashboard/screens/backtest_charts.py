@@ -2,7 +2,7 @@ import pandas as pd
 import streamlit as st
 import plotly.express as px
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from src.dashboard.utils import (
     get_latest_production_audit,
@@ -107,19 +107,12 @@ def app():
 
     # Streamlit multiselects
     selected_models = st.multiselect(
-        "Select model backtests to view",
+        "Select Model Backtests to View",
         options=models,
-    )
-
-    selected_optimizers = st.multiselect(
-        "Select portfolio optimizer backtest to view",
-        options=optimizers,
-        default=optimizers,
     )
 
     # Expose selections for downstream plotting/processing
     st.session_state.setdefault("selected_models", selected_models)
-    st.session_state.setdefault("selected_optimizers", selected_optimizers)
 
     # Date range selector
     st.subheader("Select Date Range")
@@ -144,10 +137,15 @@ def app():
             key="end_date"
         )
 
+    show_aggregate_portfolio = st.checkbox(
+        "Show Aggregate Portfolio Backtest",
+        value=False,
+        key="show_aggregate_portfolio"
+    )
     # Option to overlay SPX (S&P 500) equity curve normalized to start at 1
     show_spx = st.checkbox(
-        "Show SPX comparison (S&P 500)",
-        value=True,
+        "Show S&P 500 Equity Curve",
+        value=False,
         key="show_spx"
     )
 
@@ -179,7 +177,9 @@ def app():
             st.warning(f"No data for model '{model}' in selected date range")
             continue
 
-        series = (df_filtered.set_index('date')['cumulative_return'] + 1).rename(model)
+        daily_returns = df_filtered.set_index('date')['daily_return'].fillna(0)
+        daily_returns.iloc[0] = 0 # set initial day to zero for proper cumulative calculation
+        series = (1 + daily_returns).cumprod().rename(model)
         combined_series[model] = series
 
         # Calculate metrics from filtered data
@@ -190,16 +190,12 @@ def app():
             st.warning(f"Could not calculate metrics for model '{model}': {exc}")
 
     # Load optimizer (portfolio) backtests
-    for opt in selected_optimizers:
+    if show_aggregate_portfolio:
         try:
+            opt = optimizers.pop()
             pdf = get_portfolio_backtest(opt)
         except Exception as exc:
             st.warning(f"Could not load portfolio backtest for optimizer '{opt}': {exc}")
-            continue
-
-        if 'date' not in pdf.columns or 'cumulative_return' not in pdf.columns:
-            st.warning(f"Portfolio backtest file for '{opt}' missing expected columns")
-            continue
 
         pdf = pdf.copy()
         pdf['date'] = pd.to_datetime(pdf['date'])
@@ -209,12 +205,11 @@ def app():
         mask = (pdf['date'].dt.date >= start_date) & (pdf['date'].dt.date <= end_date)
         pdf_filtered = pdf[mask]
 
-        if len(pdf_filtered) == 0:
-            st.warning(f"No data for optimizer '{opt}' in selected date range")
-            continue
-
-        series = (pdf_filtered.set_index('date')['cumulative_return'] + 1).rename(opt)
-        combined_series[opt] = series
+        daily_returns = pdf_filtered.set_index('date')['daily_return'].fillna(0)
+        daily_returns.iloc[0] = 0 # set initial day to zero for proper cumulative calculation
+        series_title = f"Aggregate Portfolio"
+        series = (1 + daily_returns).cumprod().rename(series_title)
+        combined_series[series_title] = series
 
         # Calculate metrics from filtered data
         try:
@@ -243,12 +238,10 @@ def app():
                 spx_prices = spx_filtered.set_index('date')['close'].sort_index()
                 # daily pct change, fill first NaN as 0 (no return), then cumulative product to get equity
                 spx_returns = spx_prices.pct_change().fillna(0)
-                spx_equity = (1 + spx_returns).cumprod().rename('SPX')
-                combined_series['SPX'] = spx_equity
+                spx_equity = (1 + spx_returns).cumprod().rename('S&P 500')
+                combined_series['S&P 500'] = spx_equity
         except Exception as exc:
             st.warning(f"Could not fetch SPX data: {exc}")
-            import traceback
-            print(traceback.format_exc())
 
     if combined_series:
         combined = pd.concat(combined_series.values(), axis=1)
@@ -271,7 +264,7 @@ def app():
         st.subheader('Equity Curves')
         st.plotly_chart(fig, use_container_width=True)
     else:
-        st.info('Select one or more models or optimizers to view their equity curves.')
+        st.info('Select one or more models or check the check boxes above to view their equity curves.')
 
 
 if __name__ == "__main__":

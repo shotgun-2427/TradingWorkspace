@@ -6,6 +6,8 @@ from src.dashboard.utils import (
     get_latest_production_audit,
     get_historical_nav,
     get_spx_prices_from_date,
+    get_production_audit_optimizers,
+    get_portfolio_backtest,
 )
 
 
@@ -56,7 +58,13 @@ def app():
         )
 
     # Toggle to show/hide SPX comparison (default: shown)
-    show_spx = st.checkbox("Display SPX Equity Curve", value=True)
+    show_spx = st.checkbox("Display S&P 500 Equity Curve", value=True)
+
+    show_sim = st.checkbox(
+        "Show Simulated Portfolio",
+        value=True,
+        key="show_sim"
+    )
 
     # Ensure start_date <= end_date
     if start_date > end_date:
@@ -71,10 +79,14 @@ def app():
         st.info("No NAV data in the selected date range.")
         return
 
+    # Combined series that get plotted
+    combined_series = {}
+
     # Build equity curve: normalize NAV so the first value in the selection equals 1
     plot_df = plot_df.copy()
-    first_nav = plot_df['nav'].iloc[0]
-    plot_df['equity'] = plot_df['nav'] / first_nav
+    plot_df['daily_returns'] = plot_df['nav'].pct_change().fillna(0)
+    plot_df['equity'] = (1 + plot_df['daily_returns']).cumprod()
+    combined_series['Actual Portfolio'] = plot_df.set_index('date')['equity']
 
     # Optionally load SPX prices and normalize to start at 1 over the same date range
     spx_df = None
@@ -87,20 +99,37 @@ def app():
             spx_mask = (spx_df['date'].dt.date >= start_date) & (spx_df['date'].dt.date <= end_date)
             spx_df = spx_df.loc[spx_mask].sort_values('date')
             if not spx_df.empty:
-                first_spx = spx_df['close'].iloc[0]
-                spx_df['equity'] = spx_df['close'] / first_spx
+                spx_df['daily_returns'] = spx_df['close'].pct_change().fillna(0)
+                spx_df['equity'] = (1 + spx_df['daily_returns']).cumprod()
             else:
                 spx_df = None
         except Exception as exc:
             st.warning(f"Could not load SPX prices: {exc}")
             spx_df = None
+    
+    sim_df = None
+    if show_sim:
+        # TODO: This is what the paper pipeline currently does (assumes single optimizer). Change this 
+        # if that assumption is no longer valid.
+        opt = get_production_audit_optimizers().pop()
+        sim_df = get_portfolio_backtest(opt)
 
-    # Combine portfolio equity and SPX equity into one long dataframe for plotting
-    combined_series = {}
-    combined_series['Portfolio'] = plot_df.set_index('date')['equity']
+        sim_df['date'] = pd.to_datetime(sim_df['date'])
+        sim_df = sim_df.sort_values('date')
+
+        mask = (sim_df['date'].dt.date >= start_date) & (sim_df['date'].dt.date <= end_date)
+        sim_df = sim_df[mask]
+
+        if len(sim_df) == 0:
+            st.warning(f"No data for optimizer '{opt}' in selected date range")
+
+        sim_df['daily_return'].iloc[0] = 0 # set initial day to zero for proper cumulative calculation
+        sim_df['equity'] = (1 + sim_df['daily_return']).cumprod()
 
     if spx_df is not None and not spx_df.empty:
-        combined_series['SPX'] = spx_df.set_index('date')['equity']
+        combined_series['S&P 500'] = spx_df.set_index('date')['equity']
+    if show_sim and sim_df is not None:
+        combined_series['Simulated Portfolio'] = sim_df.set_index('date')['equity']
 
     # Concatenate series and melt to long form for Plotly
     combined = pd.concat(combined_series.values(), axis=1)

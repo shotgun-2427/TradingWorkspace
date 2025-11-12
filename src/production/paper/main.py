@@ -245,6 +245,7 @@ async def main():
     portfolio_insights, prices = await run_trading_engine(c, writer, current_date)
 
     # ==== execution engine
+    # TODO: This will break if we have multiple optimizers
     portfolio_name, portfolio_insight = portfolio_insights.popitem()
 
     basket_path = None
