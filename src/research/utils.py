@@ -57,14 +57,17 @@ def model_review_tests(baseline_config, candidate_config):
     correlations = []
     for model_name, model_data in baseline_models.items():
         if isinstance(model_data, dict) and "backtest_results" in model_data:
-            model_results = model_data["backtest_results"]
-            model_returns = np.asarray(model_results["daily_return"], dtype=float)[
-                            -min_len:
-                            ]
-            if len(model_returns) == len(candidate_returns):
-                corr = np.corrcoef(candidate_returns, model_returns)[0, 1]
-                if not np.isnan(corr):
-                    correlations.append(float(corr))
+            # New structure: model_data["backtest_results"] is a dict with "backtest_results", "portfolio_value", etc.
+            backtest_dict = model_data["backtest_results"]
+            if isinstance(backtest_dict, dict) and "backtest_results" in backtest_dict:
+                model_results = backtest_dict["backtest_results"]
+                model_returns = np.asarray(model_results["daily_return"], dtype=float)[
+                                -min_len:
+                                ]
+                if len(model_returns) == len(candidate_returns):
+                    corr = np.corrcoef(candidate_returns, model_returns)[0, 1]
+                    if not np.isnan(corr):
+                        correlations.append(float(corr))
 
     # Max Drawdown Impact: Change in worst peak-to-trough loss when adding new model
     max_drawdown_diff = _get_metric(candidate_metrics, "max_drawdown") - _get_metric(
