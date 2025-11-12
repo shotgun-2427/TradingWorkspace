@@ -102,6 +102,8 @@ def orchestrate_marginal_simulations(
             backtest_results=reduced_model_backtests,
             universe=config.universe,
             aggregators=config.aggregators,
+            start_date=config.start_date,
+            end_date=config.end_date,
         )
 
         # 2) Optimize (same optimizers as main)
@@ -116,6 +118,8 @@ def orchestrate_marginal_simulations(
         reduced_portfolio_backtests = orchestrate_portfolio_simulations(
             prices=prices,
             portfolio_insights=optimizer_weights,
+            start_date=config.start_date,
+            end_date=config.end_date,
             initial_value=getattr(config, "initial_value", 1_000_000.0),
         )
 

@@ -108,12 +108,15 @@ async def run_trading_engine(config: Config, writer: AsyncGCSWriter, current_dat
         model_backtests = orchestrate_model_simulations(
             prices=prices,
             model_insights=model_insights,
+            start_date=config.start_date,
+            end_date=config.end_date,
             initial_value=initial_value,
         )
+    # Save canonical backtest results to GCS (accurate backtest starting from start_date)
     await asyncio.gather(*(
         writer.save_polars(df, f"model_backtests_{model}_{kind}.csv")
         for model, results in model_backtests.items()
-        for kind, df in results.items()
+        for kind, df in results["backtest_results"].items()
     ))
 
     # ==== aggregate (NEW: replaces orchestrate_portfolio_backtests)
@@ -123,6 +126,8 @@ async def run_trading_engine(config: Config, writer: AsyncGCSWriter, current_dat
             backtest_results=model_backtests,
             universe=config.universe,
             aggregators=config.aggregators,
+            start_date=config.start_date,
+            end_date=config.end_date,
         )
     await asyncio.gather(*(
         writer.save_polars(df, f"aggregated_insights_{name}.csv")
@@ -147,6 +152,8 @@ async def run_trading_engine(config: Config, writer: AsyncGCSWriter, current_dat
         portfolio_backtests = orchestrate_portfolio_simulations(
             prices=prices,
             portfolio_insights=optimizer_weights,
+            start_date=config.start_date,
+            end_date=config.end_date,
             initial_value=initial_value,
         )
     await asyncio.gather(*(
