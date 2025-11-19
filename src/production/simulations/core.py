@@ -18,18 +18,18 @@ def orchestrate_marginal_simulations(
     """
     For each model in config.models, recompute the full portfolio pipeline with that model removed
     and measure marginal impact vs main_portfolio_backtests (assumed to be optimizer-level sims).
-    Returns: { removed_model: { optimizer_name: pl.DataFrame(metric,value) } }
+    Returns: (marginal_results, reduced_backtests)
+      - marginal_results: { removed_model: { optimizer_name: pl.DataFrame(metric,value) } }
+      - reduced_backtests: { removed_model: { optimizer_name: { kind: pl.DataFrame } } }
     """
     results = {}
+    all_reduced_backtests = {}
 
     # quick exits
     if not getattr(config, "models", None) or len(config.models) <= 1:
-        return results
-    if not getattr(config, "optimizers", None):
-        return results
+        return results, all_reduced_backtests
     if not getattr(config, "aggregators", None):
-        # We need aggregators to rebuild portfolios in the new pipeline
-        return results
+        return results, all_reduced_backtests
 
     def calculate_marginal_values(main_df: pl.DataFrame | None, reduced_df: pl.DataFrame | None = None) -> dict:
         if main_df is None:
@@ -91,7 +91,8 @@ def orchestrate_marginal_simulations(
 
         if not reduced_model_backtests:
             # No sims without any models left; report absolute (non-marginal) snapshot
-            model_results = create_marginal_df(config.optimizers, main_portfolio_backtests, reduced_backtests=None)
+            portfolio_names = getattr(config, "optimizers", []) or config.aggregators
+            model_results = create_marginal_df(portfolio_names, main_portfolio_backtests, reduced_backtests=None)
             if model_results:
                 results[removed] = model_results
             continue
@@ -106,26 +107,34 @@ def orchestrate_marginal_simulations(
             end_date=config.end_date,
         )
 
-        # 2) Optimize (same optimizers as main)
-        optimizer_weights = orchestrate_portfolio_optimizations(
-            prices=prices,
-            aggregated_insights=aggregated_results,
-            universe=config.universe,
-            optimizers=config.optimizers,
-        )
+        # 2) Optimize 
+        portfolio_optimizers = getattr(config, "optimizers", [])
+        optimized_insights = {}
+        if portfolio_optimizers:
+            optimized_insights = orchestrate_portfolio_optimizations(
+                prices=prices,
+                aggregated_insights=aggregated_results,
+                universe=config.universe,
+                optimizers=portfolio_optimizers,
+            )
 
-        # 3) Simulate the optimized portfolios
+        final_insights = optimized_insights if optimized_insights else aggregated_results
+
+        # 3) Simulate the portfolios
         reduced_portfolio_backtests = orchestrate_portfolio_simulations(
             prices=prices,
-            portfolio_insights=optimizer_weights,
+            portfolio_insights=final_insights,
             start_date=config.start_date,
             end_date=config.end_date,
-            initial_value=getattr(config, "initial_value", 1_000_000.0),
+            initial_value=1_000_000.0,
         )
 
-        # 4) Compare to MAIN optimizer-level sims
-        model_results = create_marginal_df(config.optimizers, main_portfolio_backtests, reduced_portfolio_backtests)
+        # Store the reduced portfolio backtests
+        all_reduced_backtests[removed] = reduced_portfolio_backtests
+
+        portfolio_names = portfolio_optimizers if portfolio_optimizers else config.aggregators
+        model_results = create_marginal_df(portfolio_names, main_portfolio_backtests, reduced_portfolio_backtests)
         if model_results:
             results[removed] = model_results
 
-    return results
+    return results, all_reduced_backtests

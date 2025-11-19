@@ -21,6 +21,7 @@ from trading_engine.core import (
     orchestrate_portfolio_aggregation,
     orchestrate_portfolio_optimizations,
     orchestrate_portfolio_simulations,
+    calculate_max_lookback,
 )
 
 logger = setup_logger(__name__)
@@ -46,58 +47,48 @@ async def setup() -> tuple:
     return config, current_date_str, gcs_writer
 
 
-def _normalize_date_to_str(x) -> str:
-    """Robustly convert a value to YYYY-MM-DD for comparisons."""
-    if isinstance(x, dt):
-        return x.strftime("%Y-%m-%d")
-    if isinstance(x, date):
-        return x.strftime("%Y-%m-%d")
-    if isinstance(x, str):
-        # assume already YYYY-MM-DD (safe for your pipeline)
-        return x
-    # polars can return Python objects; fallback via string slice
-    return str(x)[:10]
-
-
 async def run_trading_engine(config: Config, writer: AsyncGCSWriter, current_date: str):
-    initial_value = 500_000.0  # keep your existing baseline
-
-    # ==== read data
     with timed("simulations.read_data_duration"):
         lf = read_data()
 
     # ==== validate data (ensure latest data date == current date)
-    # Use max(date) from the lazy scan to avoid collecting all rows
-    latest_df = lf.select(pl.col("date").max().alias("max_date")).collect()
-    latest_date_str = _normalize_date_to_str(latest_df["max_date"][0])
+    latest_date = (
+        lf.select("date").sort("date", descending=True).first().collect().item()
+    )
 
-    if latest_date_str != current_date:
-        logger.info(f"Latest date in data: {latest_date_str}")
-        logger.info(f"Current date: {current_date}")
+    if latest_date.strftime("%Y-%m-%d") != current_date:
+        logger.info(f"Latest date in data: {latest_date}, current date: {current_date}")
         logger.warning("Not a trading day.")
         raise NotATradingDayException()
 
     # ==== create model state
     with timed("simulations.model_state_duration"):
+        # Calculate max lookback across all used components
+        total_lookback_days = calculate_max_lookback(
+            features=config.model_state_features,
+            models=config.models,
+            aggregators=config.aggregators,
+            optimizers=getattr(config, "optimizers", None),
+        )
+
         model_state, prices = create_model_state(
             lf=lf,
             features=config.model_state_features,
             start_date=config.start_date,
             end_date=config.end_date,
             universe=config.universe,
+            total_lookback_days=total_lookback_days,
         )
     await writer.save_polars(model_state, "model_state.csv")
     await writer.save_polars(prices, "prices.csv")
 
-    # ==== orchestrate model backtests (returns LazyFrames)
+    # ==== orchestrate model backtests 
     with timed("simulations.model_backtests_duration"):
         model_insights = orchestrate_model_backtests(
             model_state=model_state,
             models=config.models,
             universe=config.universe,
         )
-
-    # Save collected model insights (collect from LazyFrame)
     await asyncio.gather(*(
         writer.save_polars(lf.collect(), f"model_insights_{name}.csv")
         for name, lf in model_insights.items()
@@ -110,8 +101,9 @@ async def run_trading_engine(config: Config, writer: AsyncGCSWriter, current_dat
             model_insights=model_insights,
             start_date=config.start_date,
             end_date=config.end_date,
-            initial_value=initial_value,
+            initial_value=500_000.0,
         )
+        
     # Save canonical backtest results to GCS (accurate backtest starting from start_date)
     await asyncio.gather(*(
         writer.save_polars(df, f"model_backtests_{model}_{kind}.csv")
@@ -119,9 +111,9 @@ async def run_trading_engine(config: Config, writer: AsyncGCSWriter, current_dat
         for kind, df in results["backtest_results"].items()
     ))
 
-    # ==== aggregate (NEW: replaces orchestrate_portfolio_backtests)
+    # ==== orchestrate portfolio aggregation
     with timed("simulations.portfolio_aggregation_duration"):
-        aggregated_results = orchestrate_portfolio_aggregation(
+        aggregated_insights = orchestrate_portfolio_aggregation(
             model_insights=model_insights,
             backtest_results=model_backtests,
             universe=config.universe,
@@ -131,30 +123,41 @@ async def run_trading_engine(config: Config, writer: AsyncGCSWriter, current_dat
         )
     await asyncio.gather(*(
         writer.save_polars(df, f"aggregated_insights_{name}.csv")
-        for name, df in aggregated_results.items()
+        for name, df in aggregated_insights.items()
     ))
 
-    # ==== optimize (NEW: explicit optimizer stage)
-    with timed("simulations.portfolio_optimizations_duration"):
-        optimizer_weights = orchestrate_portfolio_optimizations(
-            prices=prices,
-            aggregated_insights=aggregated_results,
-            universe=config.universe,
-            optimizers=config.optimizers,
+    # ==== optional: orchestrate asset-level portfolio optimization
+    portfolio_optimizers = getattr(config, "optimizers", [])  # optional field
+    optimized_insights = {}
+    if portfolio_optimizers:
+        with timed("production.portfolio_optimization_duration"):
+            # Optimizers use all available prices/insights from start_date onwards.
+            # The lookback calculation ensures sufficient historical data is fetched
+            # before start_date for proper feature computation.
+            optimized_insights = orchestrate_portfolio_optimizations(
+                prices=prices,
+                aggregated_insights=aggregated_insights,
+                universe=config.universe,
+                optimizers=portfolio_optimizers,
+            )
+        await asyncio.gather(
+            *(
+                writer.save_polars(df, f"optimized_insights_{name}.csv")
+                for name, df in optimized_insights.items()
+            )
         )
-    await asyncio.gather(*(
-        writer.save_polars(df, f"optimizer_weights_{name}.csv")
-        for name, df in optimizer_weights.items()
-    ))
 
-    # ==== simulate portfolios (use optimizer weights)
+    # Choose which insights to simulate and return (prefer optimizer if present)
+    final_insights = optimized_insights if optimized_insights else aggregated_insights
+
+    # ==== orchestrate portfolio simulations
     with timed("simulations.portfolio_simulations_duration"):
         portfolio_backtests = orchestrate_portfolio_simulations(
             prices=prices,
-            portfolio_insights=optimizer_weights,
+            portfolio_insights=final_insights,
             start_date=config.start_date,
             end_date=config.end_date,
-            initial_value=initial_value,
+            initial_value=1_000_000.0,
         )
     await asyncio.gather(*(
         writer.save_polars(df, f"portfolio_backtests_{pname}_{kind}.csv")
@@ -162,23 +165,31 @@ async def run_trading_engine(config: Config, writer: AsyncGCSWriter, current_dat
         for kind, df in results.items()
     ))
 
-    # ==== marginal simulations (compares against optimizer-level sims)
+    # ==== marginal simulations 
     with timed("simulations.marginal_simulations_duration"):
-        marginal_results = orchestrate_marginal_simulations(
+        marginal_results, reduced_portfolio_backtests = orchestrate_marginal_simulations(
             config=config,
             model_insights=model_insights,
             model_backtests=model_backtests,
             main_portfolio_backtests=portfolio_backtests,
             prices=prices,
         )
+
+    # Save marginal results (metric differences)
     await asyncio.gather(*(
         writer.save_polars(df, f"marginal_results_{model}_{kind}.csv")
         for model, results in marginal_results.items()
         for kind, df in results.items()
     ))
+    
+    # Save reduced portfolio backtests (full backtest data)
+    await asyncio.gather(*(
+        writer.save_polars(df, f"reduced_portfolio_backtests_{removed_model}_{optimizer}_{kind}.csv")
+        for removed_model, optimizer_results in reduced_portfolio_backtests.items()
+        for optimizer, results in optimizer_results.items()
+        for kind, df in results.items()
+    ))
 
-    # Return both stages’ products if you need them later
-    return aggregated_results, optimizer_weights, prices, marginal_results
 
 
 async def main():
@@ -187,7 +198,7 @@ async def main():
     c, current_date, writer = await setup()
 
     # ==== trading engine
-    aggregated, optimizer_weights, prices, marginal_results = await run_trading_engine(c, writer, current_date)
+    await run_trading_engine(c, writer, current_date)
 
     # ==== Flush write to GCS
     c.dump_to_gcs(f"gs://{writer.bucket_name}/{writer.prefix}/config.json")
