@@ -6,8 +6,8 @@ from src.dashboard.utils import (
     get_latest_production_audit,
     get_historical_nav,
     get_spx_prices_from_date,
-    get_production_audit_optimizers,
     get_portfolio_backtest,
+    get_active_optimizer
 )
 
 
@@ -111,7 +111,7 @@ def app():
     if show_sim:
         # TODO: This is what the paper pipeline currently does (assumes single optimizer). Change this 
         # if that assumption is no longer valid.
-        opt = get_production_audit_optimizers().pop()
+        opt = get_active_optimizer()
         sim_df = get_portfolio_backtest(opt)
 
         sim_df['date'] = pd.to_datetime(sim_df['date'])

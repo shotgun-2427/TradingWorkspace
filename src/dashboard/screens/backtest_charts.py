@@ -7,11 +7,36 @@ from datetime import datetime
 from src.dashboard.utils import (
     get_latest_production_audit,
     get_production_audit_models,
-    get_production_audit_optimizers,
     get_model_backtest,
     get_portfolio_backtest,
-    get_spx_prices_from_date
+    get_spx_prices_from_date,
+    get_active_optimizer,
+    get_reduced_portfolio_backtest
 )
+
+
+def get_marginal_return_stream(df_base: pd.DataFrame, df_reduced: pd.DataFrame) -> pd.DataFrame:
+    """
+    Compute marginal return stream given base and reduced backtest DataFrames.
+
+    Args:
+        df_base: DataFrame with base model backtest results.
+        df_reduced: DataFrame with reduced portfolio backtest results.
+    Returns:
+        DataFrame with marginal daily returns of the marginal portfolio.
+    """
+    # Align on date
+    merged = pd.merge(
+        df_base[['date', 'daily_return']],
+        df_reduced[['date', 'daily_return']],
+        on='date',
+        suffixes=('_base', '_reduced')
+    )
+
+    # Compute marginal daily return
+    merged['daily_return'] = merged['daily_return_base'] - merged['daily_return_reduced']
+
+    return merged[['date', 'daily_return']]
 
 
 def calculate_metrics_from_backtest(df: pd.DataFrame) -> dict:
@@ -103,12 +128,12 @@ def app():
 
     # Load available models and optimizers from the latest production audit
     models = get_production_audit_models()
-    optimizers = get_production_audit_optimizers()
+
 
     # Streamlit multiselects
     selected_models = st.multiselect(
         "Select Model Backtests to View",
-        options=models,
+        options=models + [f"{model}_marginal" for model in models],
     )
 
     # Expose selections for downstream plotting/processing
@@ -156,12 +181,22 @@ def app():
     # Load model backtests
     for model in selected_models:
         try:
-            df = get_model_backtest(model)
+            if model.endswith("_marginal"):
+                # grab the full portfolio backtest and compute the marginal return series
+                base_model = model[:-9]  # remove '_marginal'
+                opt = get_active_optimizer()
+                df_base = get_portfolio_backtest(opt)
+                df_reduced = get_reduced_portfolio_backtest(base_model)
+                df = get_marginal_return_stream(df_base, df_reduced)
+            else:
+                # normal model, not marginal
+                df = get_model_backtest(model)
         except Exception as exc:
             st.warning(f"Could not load backtest for model '{model}': {exc}")
             continue
 
-        if 'date' not in df.columns or 'cumulative_return' not in df.columns:
+        if 'date' not in df.columns or 'daily_return' not in df.columns:
+            print(df)
             st.warning(f"Backtest file for '{model}' missing expected columns")
             continue
 
@@ -192,7 +227,7 @@ def app():
     # Load optimizer (portfolio) backtests
     if show_aggregate_portfolio:
         try:
-            opt = optimizers.pop()
+            opt = get_active_optimizer()
             pdf = get_portfolio_backtest(opt)
         except Exception as exc:
             st.warning(f"Could not load portfolio backtest for optimizer '{opt}': {exc}")

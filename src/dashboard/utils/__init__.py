@@ -6,5 +6,7 @@ from .data_loaders import (
     get_model_backtest,
     get_portfolio_backtest,
     get_historical_nav,
-    get_spx_prices_from_date
+    get_spx_prices_from_date,
+    get_active_optimizer,
+    get_reduced_portfolio_backtest
 )
