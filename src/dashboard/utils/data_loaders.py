@@ -166,6 +166,41 @@ def get_model_backtest(model_name: str) -> pd.DataFrame:
 
 
 @st.cache_data
+def _get_reduced_portfolio_backtest_on_day(model_name: str, date: datetime.date) -> pd.DataFrame:
+    """
+    Load a reduced portfolio backtest CSV for the given model from a specific
+    production audit into a pandas DataFrame.
+
+    The CSV path format is:
+        hcf/paper/simulations_audit/YYYY-MM-DD/reduced_portfolio_backtests_{model_name}_backtest_results.csv
+    """
+    opt = get_active_optimizer()
+    csv_blob_path = (
+        f"{SIMULATIONS_AUDIT_PREFIX}/{date.strftime('%Y-%m-%d')}/"
+        f"reduced_portfolio_backtests_{model_name}_{opt}_backtest_results.csv"
+    )
+
+    bucket = get_gcs_bucket()
+    blob = bucket.blob(csv_blob_path)
+
+    data_bytes = blob.download_as_bytes()
+    df = pd.read_csv(BytesIO(data_bytes))
+
+    return df
+
+
+def get_reduced_portfolio_backtest(model_name: str) -> pd.DataFrame:
+    """
+    Load a reduced portfolio backtest CSV for the given model from the latest
+    simulations audit into a pandas DataFrame.
+
+    The CSV path format is:
+        hcf/paper/simulations_audit/YYYY-MM-DD/reduced_portfolio_backtests_{model_name}_backtest_results.csv
+    """
+    return _get_reduced_portfolio_backtest_on_day(model_name, get_latest_simulations_audit())
+
+
+@st.cache_data
 def _get_portfolio_backtest_on_day(optimizer_name: str, date: datetime.date) -> pd.DataFrame:
     """
     Load a portfolio backtest CSV for the given optimizer from a specific
@@ -316,6 +351,7 @@ def get_historical_nav() -> pd.DataFrame:
     """
     return _get_historical_nav_on_day(get_latest_production_audit())
 
+
 @st.cache_data
 def get_spx_prices_from_date(start_date: datetime.date) -> pd.DataFrame:
     """
@@ -343,3 +379,15 @@ def get_spx_prices_from_date(start_date: datetime.date) -> pd.DataFrame:
     data["date"] = data["date"].dt.tz_localize(None)
     data["close"] = pd.to_numeric(data["close"], errors="coerce")
     return data
+
+@st.cache_data
+def get_active_optimizer() -> str:
+    """
+    TODO: This needs to be changed to support multiple optimizers. This is
+    (unfortunately) the logic that the paper portfolio uses to get the optimizer name.
+    Get the active optimizer name from the latest production audit config.
+
+    Returns:
+        str: The active optimizer name.
+    """
+    return get_production_audit_optimizers().pop()
