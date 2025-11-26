@@ -8,8 +8,8 @@ on:
         required: true
         type: choice
         options:
-        - production-paper
-        - simulations-paper
+          - production-paper
+          - simulations-paper
       target_tag:
         description: 'Target Tag (e.g. prod-paper-v1.0.4 or sim-paper-v1.1.0)'
         required: true
@@ -25,11 +25,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: google-github-actions/auth@v2
-        with: { credentials_json: ${{ secrets.GCP_SA_KEY }} }
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
 
-      - uses: google-github-actions/setup-gcloud@v2
-        with: { project_id: wsb-hc-qasap-ae2e }
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Configure Docker auth
+        run: gcloud auth configure-docker
 
       - name: Execute Rollback
         env:
@@ -83,10 +88,6 @@ jobs:
 
           # Initialize card
           myTeamsMessage = pymsteams.connectorcard(os.environ['TEAMS_WEBHOOK_URL'])
-          
-          # Set Card visuals - RED for Rollback
-          myTeamsMessage.title('')
-          myTeamsMessage.color('#FF0000') 
 
           # Build the message text
           msg = f'''
@@ -96,7 +97,5 @@ jobs:
           **Executed by:** {os.environ['ACTOR']}
           '''
           myTeamsMessage.text(msg)
-
-          # Send
           myTeamsMessage.send()
           "

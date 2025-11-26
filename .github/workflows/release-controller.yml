@@ -95,6 +95,7 @@ jobs:
         env:
           TEAMS_WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
           VERSION: ${{ steps.tag.outputs.new_tag }}
+          ACTOR: ${{ github.actor }}
           PIPELINE: "Production Paper"
           REPO_URL: "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
         run: |
@@ -189,6 +190,7 @@ jobs:
         env:
           TEAMS_WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
           VERSION: ${{ steps.tag.outputs.new_tag }}
+          ACTOR: ${{ github.actor }}
           PIPELINE: "Simulations Paper"
           REPO_URL: "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
         run: |
