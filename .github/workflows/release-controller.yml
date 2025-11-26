@@ -9,9 +9,9 @@ on:
         default: 'patch'
         type: choice
         options:
-        - patch
-        - minor
-        - major
+          - patch
+          - minor
+          - major
       deploy_prod_paper:
         description: 'Deploy Production Paper?'
         type: boolean
@@ -43,12 +43,18 @@ jobs:
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           default_bump: ${{ inputs.release_level }}
-          tag_prefix: "prod-paper-v" 
-      
+          tag_prefix: "prod-paper-v"
+
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
-        with: 
+        with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Configure Docker auth
+        run: gcloud auth configure-docker
 
       - name: Build Docker
         run: |
@@ -82,7 +88,7 @@ jobs:
         if: success()
         uses: actions/setup-python@v4
         with:
-          python-version: '3.10' 
+          python-version: '3.10'
 
       - name: Run Notification Script
         if: success()
@@ -140,12 +146,18 @@ jobs:
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           default_bump: ${{ inputs.release_level }}
-          tag_prefix: "sim-paper-v" 
+          tag_prefix: "sim-paper-v"
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
-        with: 
+        with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Configure Docker auth
+        run: gcloud auth configure-docker
 
       - name: Build Docker
         run: |
@@ -177,7 +189,7 @@ jobs:
         if: success()
         uses: actions/setup-python@v4
         with:
-          python-version: '3.10' 
+          python-version: '3.10'
 
       - name: Run Notification Script
         if: success()

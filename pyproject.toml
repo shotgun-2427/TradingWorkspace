@@ -7,7 +7,7 @@ readme = "README.md"
 
 [tool.poetry.dependencies]
 python = ">=3.11,<3.14"
-hawk-backtester = "^0.4.0"
+hawk-backtester = "^0.5.1"
 polars = "1.32.0"
 pyyaml = "^6.0.2"
 pyarrow = "^21.0.0"
