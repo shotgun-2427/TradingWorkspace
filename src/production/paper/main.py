@@ -204,6 +204,7 @@ async def run_execution_engine(
             insights=portfolio_insight,
             prices=prices,
             universe=config.universe,
+            cash_buffer_usd=float(config.cash_buffer),
         )
     await writer.save_polars(goal_positions, "goal_positions.csv")
 
