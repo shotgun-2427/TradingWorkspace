@@ -9,12 +9,12 @@ on:
         default: 'patch'
         type: choice
         options:
-          - patch
-          - minor
-          - major
+        - patch
+        - minor
+        - major
 
 permissions:
-  contents: write # Required to push the new tag back to the repo
+  contents: write
   id-token: write
 
 jobs:
@@ -29,23 +29,23 @@ jobs:
       new_version: ${{ steps.create_tag.outputs.new_tag }}
       docker_image: ${{ steps.meta.outputs.IMAGE_NAME }}
       project_id: ${{ steps.meta.outputs.PROJECT_ID }}
-
+    
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # Required to calculate previous tags
+          fetch-depth: 0 
 
-      # 1. Automate Versioning & Tagging
+      # 1. Automate Versioning
       - name: Bump version and push tag
         id: create_tag
         uses: mathieudutour/github-tag-action@v6.2
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           default_bump: ${{ inputs.release_level }}
-          tag_prefix: "v"
+          tag_prefix: "v" 
 
-      # 2. Google Cloud Auth
+      # 2. Authenticate
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
@@ -54,7 +54,7 @@ jobs:
       - name: Configure Docker for GCR
         run: gcloud auth configure-docker
 
-      # 3. Define Constants
+      # 3. Define Meta
       - name: Define Image Meta
         id: meta
         run: |
@@ -64,15 +64,14 @@ jobs:
       - name: Buildx create
         run: docker buildx create --use || echo "Builder already exists"
 
-      # 4. Build & Push (Tagged with the new Git Tag AND latest)
+      # 4. Build & Push
       - name: Build and push Docker Image
         run: |
           PROJECT_ID="${{ steps.meta.outputs.PROJECT_ID }}"
           IMAGE_NAME="${{ steps.meta.outputs.IMAGE_NAME }}"
-          # Use the tag generated in step 1
           VERSION="${{ steps.create_tag.outputs.new_tag }}"
 
-          echo "Building and Pushing: $VERSION"
+          echo "Building: $IMAGE_NAME:$VERSION"
 
           docker buildx build \
             --platform linux/amd64 \
@@ -83,18 +82,18 @@ jobs:
             --push
 
   # -----------------------------------------------------------
-  # JOB 2: Deploy to Cloud Run Jobs & Scheduler
+  # JOB 2: Deploy & Notify
   # -----------------------------------------------------------
   deploy:
     name: Deploy
-    needs: build-and-tag # Waits for build to finish
+    needs: build-and-tag
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
+        
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
@@ -114,12 +113,10 @@ jobs:
           IB_HOST: 10.4.0.2
           IB_PORT: 4004
           IMAGE_NAME: ${{ needs.build-and-tag.outputs.docker_image }}
-          # CRITICAL: We use the exact version created in the previous job
           IMAGE_TAG: ${{ needs.build-and-tag.outputs.new_version }}
         run: |
           set -euo pipefail
 
-          # --- Helper Functions (From your original script) ---
           deploy_job() {
             local JOB_NAME=$1
             local IMAGE=$2
@@ -165,17 +162,54 @@ jobs:
               --oauth-token-scope="https://www.googleapis.com/auth/cloud-platform"
           }
           
-          # --- Execution ---
           JOB_NAME="production-paper-job"
-          SCHEDULER_NAME="production-paper-scheduler"
-
-          # Using the exact version tag from the build step
           FULL_IMAGE="${IMAGE_NAME}:${IMAGE_TAG}"
-          echo "Deploying image: $FULL_IMAGE"
 
-          # Deploy paper job
           deploy_job "$JOB_NAME" "$FULL_IMAGE" \
             --set-env-vars=environment=prod,variant=paper,NEWRELIC_API_KEY=$NEWRELIC_API_KEY,IB_HOST=$IB_HOST,IB_PORT=$IB_PORT,IB_CLIENT_ID=1
 
-          # Schedule at 2:40 PM America/Chicago daily
           deploy_scheduler production-paper-scheduler "40 14 * * 1-5" production-paper-job "America/Chicago"
+
+      # -----------------------------------------------------------
+      # Notify Teams (Emulating pymsteams format)
+      # -----------------------------------------------------------
+      - name: Notify Teams
+        if: success()
+        run: |
+          # 1. Get Commit Message (Sanitize double quotes)
+          COMMIT_MSG=$(git log -1 --format=%s | sed 's/"/\\"/g')
+          
+          # 2. Prepare Variables
+          VERSION="${{ needs.build-and-tag.outputs.new_version }}"
+          PIPELINE="production-paper"
+          REPO="${{ github.repository }}"
+          RUN_URL="https://github.com/$REPO/actions/runs/${{ github.run_id }}"
+          
+          # 3. Construct JSON (Legacy MessageCard Format used by pymsteams)
+          # Note: We use "facts" to create a nice key-value list
+          cat <<EOF > payload.json
+          {
+            "@type": "MessageCard",
+            "@context": "http://schema.org/extensions",
+            "themeColor": "0076D7",
+            "summary": "Deployment Successful",
+            "sections": [{
+              "activityTitle": "🚀 Deployment Successful",
+              "activitySubtitle": "$PIPELINE",
+              "facts": [
+                { "name": "Version", "value": "$VERSION" },
+                { "name": "Pipeline", "value": "$PIPELINE" },
+                { "name": "Commit", "value": "$COMMIT_MSG" }
+              ],
+              "markdown": true
+            }],
+            "potentialAction": [{
+              "@type": "OpenUri",
+              "name": "View in GitHub",
+              "targets": [{ "os": "default", "uri": "$RUN_URL" }]
+            }]
+          }
+          EOF
+          
+          # 4. Send to Logic App
+          curl -H "Content-Type: application/json" -d @payload.json "${{ secrets.TEAMS_WEBHOOK_URL }}"
