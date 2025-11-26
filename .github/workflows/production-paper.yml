@@ -44,10 +44,12 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           default_bump: ${{ inputs.release_level }}
           tag_prefix: "prod-paper-v" 
-
-      - uses: google-github-actions/auth@v2
-        with: { credentials_json: ${{ secrets.GCP_SA_KEY }} }
-      - run: gcloud auth configure-docker
+      
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with: 
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+        run: gcloud auth configure-docker
 
       - name: Build Docker
         run: |
