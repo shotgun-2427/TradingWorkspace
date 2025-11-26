@@ -8,10 +8,6 @@ RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Rust and Cargo
-RUN curl https://sh.rustup.rs -sSf | sh -s -- -y
-ENV PATH="/root/.cargo/bin:${PATH}"
-
 # Install Python dependencies
 COPY src/production/simulations/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

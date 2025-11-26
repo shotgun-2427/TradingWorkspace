@@ -110,22 +110,15 @@ jobs:
           # Initialize card
           myTeamsMessage = pymsteams.connectorcard(os.environ['TEAMS_WEBHOOK_URL'])
           
-          # Set Card visuals
-          myTeamsMessage.title('🚀 Deployment Successful')
-          myTeamsMessage.color('#0076D7') # Blue
-
           # Build the message text
           msg = f'''
+          🚀 New Deployment
           **Pipeline:** {os.environ['PIPELINE']}  
           **Version:** {os.environ['VERSION']}  
           **Commit:** {commit_msg}
+          **Executed by:** {os.environ['ACTOR']}
           '''
           myTeamsMessage.text(msg)
-
-          # Add Button
-          myTeamsMessage.addLinkButton('View in GitHub', os.environ['REPO_URL'])
-
-          # Send
           myTeamsMessage.send()
           "
 
@@ -208,15 +201,14 @@ jobs:
           commit_msg = subprocess.getoutput('git log -1 --format=%s')
 
           myTeamsMessage = pymsteams.connectorcard(os.environ['TEAMS_WEBHOOK_URL'])
-          myTeamsMessage.title('🚀 Deployment Successful')
-          myTeamsMessage.color('#0076D7') 
 
           msg = f'''
+          🚀 New Deployment
           **Pipeline:** {os.environ['PIPELINE']}  
           **Version:** {os.environ['VERSION']}  
           **Commit:** {commit_msg}
+          **Executed by:** {os.environ['ACTOR']}
           '''
           myTeamsMessage.text(msg)
-          myTeamsMessage.addLinkButton('View in GitHub', os.environ['REPO_URL'])
           myTeamsMessage.send()
           "
