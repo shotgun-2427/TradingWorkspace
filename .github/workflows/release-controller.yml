@@ -113,10 +113,10 @@ jobs:
           
           # Build the message text
           msg = f'''
-          🚀 New Deployment
+          🚀 New Deployment  
           **Pipeline:** {os.environ['PIPELINE']}  
           **Version:** {os.environ['VERSION']}  
-          **Commit:** {commit_msg}
+          **Commit:** {commit_msg}  
           **Executed by:** {os.environ['ACTOR']}
           '''
           myTeamsMessage.text(msg)
@@ -205,10 +205,10 @@ jobs:
           myTeamsMessage = pymsteams.connectorcard(os.environ['TEAMS_WEBHOOK_URL'])
 
           msg = f'''
-          🚀 New Deployment
+          🚀 New Deployment  
           **Pipeline:** {os.environ['PIPELINE']}  
           **Version:** {os.environ['VERSION']}  
-          **Commit:** {commit_msg}
+          **Commit:** {commit_msg}  
           **Executed by:** {os.environ['ACTOR']}
           '''
           myTeamsMessage.text(msg)
