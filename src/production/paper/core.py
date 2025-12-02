@@ -13,7 +13,7 @@ def construct_goal_positions(
         insights: DataFrame,
         prices: DataFrame,
         universe: Optional[Iterable[str]] = None,
-        cash_buffer_usd: float = 0.0,
+        cash_buffer_pct: float = 0.0,
 ) -> DataFrame:
     """
     Build per-ticker targets using latest insight weights and latest prices,
@@ -22,7 +22,8 @@ def construct_goal_positions(
     Cost Model: max($1.00, $0.01 per share)
 
     Inputs:
-      - cash_buffer_usd: Amount of cash to explicitly reserve (deducted from NAV before weighting).
+      - cash_buffer_pct: Fraction of NAV (0–1) to explicitly reserve as cash.
+                          Example: 0.05 -> keep 5% of NAV in cash.
     """
     if insights.is_empty() or prices.is_empty():
         return pl.DataFrame(
@@ -65,9 +66,10 @@ def construct_goal_positions(
         u_canon = {_canon(u) for u in universe}
         tickers = [t for t in tickers if t in u_full or _canon(t) in u_canon]
 
-    # 1. Get Base NAV and apply Cash Buffer
+    # 1. Get Base NAV and apply Cash Buffer as a % of NAV
     raw_nav = float(ib_client.get_nav())
-    investable_capital = max(0.0, raw_nav - cash_buffer_usd)
+    buffer_frac = max(0.0, min(1.0, float(cash_buffer_pct)))  # clamp to [0, 1]
+    investable_capital = raw_nav * (1.0 - buffer_frac)
 
     rows = []
     for t in tickers:

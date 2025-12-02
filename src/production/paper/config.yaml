@@ -17,7 +17,7 @@ models: [
 aggregators: [ model_mvo_amma_constrained ]
 optimizers: [ mean_variance_constrained ]
 
-cash_buffer: 5000 # USD buffer to maintain in the account
+cash_buffer: 0.005 # % of NAV buffer to maintain in the account (0.5%)
 
 ib_gateway:
   host: 127.0.0.1

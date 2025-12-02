@@ -204,7 +204,7 @@ async def run_execution_engine(
             insights=portfolio_insight,
             prices=prices,
             universe=config.universe,
-            cash_buffer_usd=float(config.cash_buffer),
+            cash_buffer_pct=float(config.cash_buffer),
         )
     await writer.save_polars(goal_positions, "goal_positions.csv")
 
@@ -276,9 +276,9 @@ async def main():
         )
 
     logger.info(message)
-    
+
     post_to_teams(webhook_url=c.notifications["msteams_webhook"], message=message)
-    
+
 
 if __name__ == "__main__":
     setup_otel("production_paper")
