@@ -19,6 +19,7 @@ ENV MOSEKLM_LICENSE_FILE=/root/mosek/mosek.lic
 
 # Copy source code
 COPY src/production/paper /app/production/paper
+COPY src/production/simulations/config.yaml /app/production/simulations/config.yaml
 COPY src/common /app/common
 COPY src/trading_engine /app/trading_engine
 
