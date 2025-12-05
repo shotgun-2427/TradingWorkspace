@@ -1,8 +1,7 @@
 import asyncio
-from datetime import datetime, date, datetime as dt
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
-import polars as pl
 from opentelemetry import trace
 
 from common.async_gcs_writer import AsyncGCSWriter
@@ -30,12 +29,13 @@ logger = setup_logger(__name__)
 async def setup() -> tuple:
     """Setup function to initialize resources if needed."""
     # Config
-    config = read_config_yaml("production/paper/config.yaml")
+    config = read_config_yaml("production/simulations/config.yaml")
     validate_production_config(config)
     logger.info(f"Configuration loaded: {config}")
 
-    # Use current NY date string (your pipeline expects YYYY-MM-DD)
-    current_date_str = (datetime.now(ZoneInfo("America/New_York"))).strftime("%Y-%m-%d")
+    # Get current date in US Eastern Time
+    current_date = datetime.now(ZoneInfo("America/New_York"))
+    current_date_str = current_date.strftime("%Y-%m-%d")
 
     # GCS Writer
     gcs_writer = AsyncGCSWriter(
@@ -82,7 +82,7 @@ async def run_trading_engine(config: Config, writer: AsyncGCSWriter, current_dat
     await writer.save_polars(model_state, "model_state.csv")
     await writer.save_polars(prices, "prices.csv")
 
-    # ==== orchestrate model backtests 
+    # ==== orchestrate model backtests
     with timed("simulations.model_backtests_duration"):
         model_insights = orchestrate_model_backtests(
             model_state=model_state,
@@ -90,8 +90,8 @@ async def run_trading_engine(config: Config, writer: AsyncGCSWriter, current_dat
             universe=config.universe,
         )
     await asyncio.gather(*(
-        writer.save_polars(lf.collect(), f"model_insights_{name}.csv")
-        for name, lf in model_insights.items()
+        writer.save_polars(df, f"model_insights_{name}.csv")
+        for name, df in model_insights.items()
     ))
 
     # ==== orchestrate model simulations
@@ -130,7 +130,7 @@ async def run_trading_engine(config: Config, writer: AsyncGCSWriter, current_dat
     portfolio_optimizers = getattr(config, "optimizers", [])  # optional field
     optimized_insights = {}
     if portfolio_optimizers:
-        with timed("production.portfolio_optimization_duration"):
+        with timed("simulations.portfolio_optimization_duration"):
             # Optimizers use all available prices/insights from start_date onwards.
             # The lookback calculation ensures sufficient historical data is fetched
             # before start_date for proper feature computation.
@@ -165,23 +165,15 @@ async def run_trading_engine(config: Config, writer: AsyncGCSWriter, current_dat
         for kind, df in results.items()
     ))
 
-    # ==== marginal simulations 
+    # ==== marginal simulations (reduced portfolio backtests)
     with timed("simulations.marginal_simulations_duration"):
-        marginal_results, reduced_portfolio_backtests = orchestrate_marginal_simulations(
+        reduced_portfolio_backtests = orchestrate_marginal_simulations(
             config=config,
             model_insights=model_insights,
             model_backtests=model_backtests,
-            main_portfolio_backtests=portfolio_backtests,
             prices=prices,
         )
 
-    # Save marginal results (metric differences)
-    await asyncio.gather(*(
-        writer.save_polars(df, f"marginal_results_{model}_{kind}.csv")
-        for model, results in marginal_results.items()
-        for kind, df in results.items()
-    ))
-    
     # Save reduced portfolio backtests (full backtest data)
     await asyncio.gather(*(
         writer.save_polars(df, f"reduced_portfolio_backtests_{removed_model}_{optimizer}_{kind}.csv")
