@@ -21,19 +21,19 @@ pl.enable_string_cache()
 def read_data() -> LazyFrame:
     """Read the raw data from the Parquet file in lazy mode."""
     BUCKET = "wsb-hc-qasap-bucket-1"
-    PREFIX = "hcf/raw_data/factset_equities_ohlcv_snapshot"
+    PREFIX = "hcf/raw_data/universal"
     parquet_uri = f"gs://{BUCKET}/{PREFIX}/parquet/part-*.parquet"
     return pl.scan_parquet(parquet_uri)
 
 
 def create_model_state(
-    lf: LazyFrame,
-    features: list[str],
-    start_date: datetime.date,
-    end_date: datetime.date,
-    universe: List[str],
-    registry=None,
-    total_lookback_days: Optional[int] = None,
+        lf: LazyFrame,
+        features: list[str],
+        start_date: datetime.date,
+        end_date: datetime.date,
+        universe: List[str],
+        registry=None,
+        total_lookback_days: Optional[int] = None,
 ) -> tuple[DataFrame, DataFrame]:
     """
     Build model state with warmup lookback and eager feature support.
@@ -67,7 +67,7 @@ def create_model_state(
         lookback_days = total_lookback_days
     else:
         lookback_days = _max_feature_lookback(features)
-    
+
     lookback_calendar_days = calculate_calendar_lookback(lookback_days)
     buffer_start_date = start_date - datetime.timedelta(days=lookback_calendar_days)
 
@@ -111,7 +111,7 @@ def create_model_state(
 
 
 def _build_model_lazy_input(
-    model_state: DataFrame, tickers: List[str], columns: List[str]
+        model_state: DataFrame, tickers: List[str], columns: List[str]
 ) -> pl.LazyFrame:
     cols = ["date", "ticker", *columns]
     return model_state.lazy().filter(pl.col("ticker").is_in(tickers)).select(cols)
@@ -161,14 +161,14 @@ def _max_feature_lookback(features: Sequence[str]) -> int:
 
 
 def calculate_max_lookback(
-    features: Optional[List[str]] = None,
-    models: Optional[List[str]] = None,
-    aggregators: Optional[List[str]] = None,
-    optimizers: Optional[List[str]] = None,
-    feature_registry: dict = FEATURES,
-    model_registry: dict = MODELS,
-    aggregator_registry: dict = AGGREGATORS,
-    optimizer_registry: dict = OPTIMIZERS,
+        features: Optional[List[str]] = None,
+        models: Optional[List[str]] = None,
+        aggregators: Optional[List[str]] = None,
+        optimizers: Optional[List[str]] = None,
+        feature_registry: dict = FEATURES,
+        model_registry: dict = MODELS,
+        aggregator_registry: dict = AGGREGATORS,
+        optimizer_registry: dict = OPTIMIZERS,
 ) -> int:
     """
     Calculate the required lookback days for the pipeline.
@@ -203,20 +203,20 @@ def calculate_max_lookback(
         Maximum lookback days across all used components
     """
     lookbacks = []
-    
+
     # Features lookback: needed for feature computation
     if features:
         lookbacks.extend(
             feature_registry.get(f, {}).get("lookback", 0) for f in features
         )
-    
+
     # Models lookback: models operate on features, so they don't need additional raw data lookback
     # (Their lookback is typically 0, but we include it for completeness)
     if models:
         lookbacks.extend(
             model_registry.get(m, {}).get("lookback", 0) for m in models
         )
-    
+
     # Aggregators lookback: need historical model returns
     # Since model_state is trimmed to start_date onwards, aggregators need enough
     # lookback so that by the time they operate, they have sufficient history.
@@ -225,23 +225,23 @@ def calculate_max_lookback(
         lookbacks.extend(
             aggregator_registry.get(a, {}).get("lookback", 0) for a in aggregators
         )
-    
+
     # Optimizers lookback: need historical price data
     # Similar to aggregators, we take max to ensure sufficient data BEFORE start_date.
     if optimizers:
         lookbacks.extend(
             optimizer_registry.get(o, {}).get("lookback", 0) for o in optimizers
         )
-    
+
     return max(lookbacks, default=0)
 
 
 def orchestrate_model_backtests(
-    model_state: DataFrame,
-    models: List[str],
-    universe: List[str],
-    clamp_bounds: tuple[float, float] = (-1.0, 1.0),
-    registry=MODELS,
+        model_state: DataFrame,
+        models: List[str],
+        universe: List[str],
+        clamp_bounds: tuple[float, float] = (-1.0, 1.0),
+        registry=MODELS,
 ) -> Dict[str, pl.LazyFrame]:
     """
     Run selected models and return per-model LazyFrames padded to the full universe:
@@ -296,13 +296,13 @@ def construct_prices(model_state: DataFrame, universe: List[str]) -> pl.DataFram
 
 
 def orchestrate_model_simulations(
-    prices: DataFrame,
-    model_insights: Dict[str, pl.LazyFrame],
-    start_date: datetime.date,
-    end_date: datetime.date,
-    initial_value: float = 1_000_000.0,
-    fee_model: str = "ibkr_pro_fixed",
-    slippage_bps: float = 1.0,
+        prices: DataFrame,
+        model_insights: Dict[str, pl.LazyFrame],
+        start_date: datetime.date,
+        end_date: datetime.date,
+        initial_value: float = 1_000_000.0,
+        fee_model: str = "ibkr_pro_fixed",
+        slippage_bps: float = 1.0,
 ) -> Dict[str, dict]:
     """
     Runs all backtests and returns { model_name: {"full_backtest_results": dict, "backtest_results": dict} }.
@@ -387,15 +387,15 @@ def _enforce_l1_budget(lf: pl.LazyFrame, budget: float = 1.0) -> pl.LazyFrame:
 
 
 def orchestrate_portfolio_aggregation(
-    model_insights: Dict[str, pl.LazyFrame],
-    backtest_results: Dict[str, dict],
-    universe: List[str],
-    aggregators: List[str],
-    start_date: datetime.date,
-    end_date: datetime.date,
-    clamp_bounds: tuple[float, float] = (-1.0, 1.0),
-    l1_budget: float = 1.0,
-    registry=AGGREGATORS,
+        model_insights: Dict[str, pl.LazyFrame],
+        backtest_results: Dict[str, dict],
+        universe: List[str],
+        aggregators: List[str],
+        start_date: datetime.date,
+        end_date: datetime.date,
+        clamp_bounds: tuple[float, float] = (-1.0, 1.0),
+        l1_budget: float = 1.0,
+        registry=AGGREGATORS,
 ) -> Dict[str, DataFrame]:
     """
     Aggregate model insights into a single portfolio per aggregator.
@@ -444,13 +444,13 @@ def orchestrate_portfolio_aggregation(
 
 
 def orchestrate_portfolio_optimizations(
-    prices: DataFrame,
-    aggregated_insights: Dict[str, DataFrame],
-    universe: List[str],
-    optimizers: List[str],
-    clamp_bounds: tuple[float, float] = (-1.0, 1.0),
-    l1_budget: float = 1.0,
-    registry=OPTIMIZERS,
+        prices: DataFrame,
+        aggregated_insights: Dict[str, DataFrame],
+        universe: List[str],
+        optimizers: List[str],
+        clamp_bounds: tuple[float, float] = (-1.0, 1.0),
+        l1_budget: float = 1.0,
+        registry=OPTIMIZERS,
 ) -> Dict[str, DataFrame]:
     """
     Run asset-level portfolio optimizers on aggregated desired weights.
@@ -485,13 +485,13 @@ def orchestrate_portfolio_optimizations(
 
 
 def orchestrate_portfolio_simulations(
-    prices: DataFrame,
-    portfolio_insights: Dict[str, DataFrame],
-    start_date: datetime.date,
-    end_date: datetime.date,
-    initial_value: float = 1_000_000.0,
-    fee_model: str = "ibkr_pro_fixed",
-    slippage_bps: float = 1.0,
+        prices: DataFrame,
+        portfolio_insights: Dict[str, DataFrame],
+        start_date: datetime.date,
+        end_date: datetime.date,
+        initial_value: float = 1_000_000.0,
+        fee_model: str = "ibkr_pro_fixed",
+        slippage_bps: float = 1.0,
 ):
     """
     Run backtests on portfolio weights.
@@ -534,19 +534,19 @@ def orchestrate_portfolio_simulations(
 
 
 def run_full_backtest(
-    universe: list[str],
-    features: list[str],
-    models: list[str],
-    aggregators: list[str],
-    optimizers: Optional[list[str]],
-    start_date: datetime.date,
-    end_date: datetime.date,
-    initial_value: int = 1_000_000,
-    fee_model: str = "ibkr_pro_fixed",
-    slippage_bps: float = 1.0,
-    model_registry: dict = MODELS,
-    aggregator_registry: dict = AGGREGATORS,
-    portfolio_optimizer_registry: dict = OPTIMIZERS,
+        universe: list[str],
+        features: list[str],
+        models: list[str],
+        aggregators: list[str],
+        optimizers: Optional[list[str]],
+        start_date: datetime.date,
+        end_date: datetime.date,
+        initial_value: int = 1_000_000,
+        fee_model: str = "ibkr_pro_fixed",
+        slippage_bps: float = 1.0,
+        model_registry: dict = MODELS,
+        aggregator_registry: dict = AGGREGATORS,
+        portfolio_optimizer_registry: dict = OPTIMIZERS,
 ):
     """Complete backtest orchestration (models → aggregation → optimization)."""
 
