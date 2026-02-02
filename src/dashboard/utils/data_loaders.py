@@ -6,6 +6,7 @@ import json
 from google.cloud import storage
 import streamlit as st
 import pandas as pd
+import pandas_market_calendars as mcal
 from io import BytesIO
 import yfinance as yf
 
@@ -14,7 +15,7 @@ import yfinance as yf
 BUCKET_NAME = "wsb-hc-qasap-bucket-1"
 SIMULATIONS_AUDIT_PREFIX = "hcf/paper/simulations_audit"
 PRODUCTION_AUDIT_PREFIX = "hcf/paper/production_audit"
-
+NYSE = mcal.get_calendar('NYSE').schedule(start_date='2015/01/01', end_date=datetime.today().strftime('%Y-%m-%d'))
 
 @st.cache_resource
 def get_gcs_bucket() -> storage.Bucket:
@@ -26,7 +27,6 @@ def get_gcs_bucket() -> storage.Bucket:
     """
     client = storage.Client()
     return client.bucket(BUCKET_NAME)
-
 
 @st.cache_data(ttl=3600)
 def get_latest_simulations_audit() -> datetime.date:
@@ -125,6 +125,23 @@ def get_production_audit_optimizers() -> list:
     return get_production_audit_config().get("optimizers", [])
 
 
+def align(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Align the given DataFrame's 'date' column to only include NYSE trading days.
+
+    Args:
+        df: The DataFrame with a 'date' column to align.
+
+    Returns:
+        pd.DataFrame: The aligned DataFrame.
+    """
+    df = df.copy()
+    df["date"] = pd.to_datetime(df["date"]).dt.normalize()
+    # Only filter in dates that intersect with NYSE trading days
+    df = df[df["date"].isin(NYSE.index)]
+    return df
+
+
 @st.cache_data
 def _get_model_backtest_on_day(model_name: str, date: datetime.date) -> pd.DataFrame:
     """
@@ -147,7 +164,6 @@ def _get_model_backtest_on_day(model_name: str, date: datetime.date) -> pd.DataF
 
     return df
 
-
 def get_model_backtest(model_name: str) -> pd.DataFrame:
     """
     Load a model's backtest results CSV from the latest production audit into a
@@ -162,7 +178,8 @@ def get_model_backtest(model_name: str) -> pd.DataFrame:
     Returns:
         pd.DataFrame: The backtest results as a pandas DataFrame.
     """
-    return _get_model_backtest_on_day(model_name, get_latest_production_audit())
+    return align(_get_model_backtest_on_day(model_name, get_latest_production_audit()))
+
 
 
 @st.cache_data
@@ -188,7 +205,6 @@ def _get_reduced_portfolio_backtest_on_day(model_name: str, date: datetime.date)
 
     return df
 
-
 def get_reduced_portfolio_backtest(model_name: str) -> pd.DataFrame:
     """
     Load a reduced portfolio backtest CSV for the given model from the latest
@@ -198,7 +214,6 @@ def get_reduced_portfolio_backtest(model_name: str) -> pd.DataFrame:
         hcf/paper/simulations_audit/YYYY-MM-DD/reduced_portfolio_backtests_{model_name}_backtest_results.csv
     """
     return _get_reduced_portfolio_backtest_on_day(model_name, get_latest_simulations_audit())
-
 
 @st.cache_data
 def _get_portfolio_backtest_on_day(optimizer_name: str, date: datetime.date) -> pd.DataFrame:
@@ -237,7 +252,8 @@ def get_portfolio_backtest(optimizer_name: str) -> pd.DataFrame:
     Returns:
         pd.DataFrame: The backtest results as a pandas DataFrame.
     """
-    return _get_portfolio_backtest_on_day(optimizer_name, get_latest_production_audit())
+    return align(_get_portfolio_backtest_on_day(optimizer_name, get_latest_production_audit()))
+
 
 
 @st.cache_data
@@ -335,7 +351,6 @@ def _get_historical_nav_on_day(date: datetime.date) -> pd.DataFrame:
 
     data_bytes = blob.download_as_bytes()
     df = pd.read_csv(BytesIO(data_bytes))
-
     return df
 
 
@@ -349,7 +364,7 @@ def get_historical_nav() -> pd.DataFrame:
     Returns:
         pd.DataFrame: Has two columns, date (YYYY-MM-DD) and nav (float).
     """
-    return _get_historical_nav_on_day(get_latest_production_audit())
+    return align(_get_historical_nav_on_day(get_latest_production_audit()))
 
 
 @st.cache_data
