@@ -7,11 +7,11 @@ services:
     ports: ["8501:8501"]
     working_dir: /work/src/dashboard
     environment:
-      - GOOGLE_APPLICATION_CREDENTIALS=/sa.json   # path *inside* container
+      - GOOGLE_APPLICATION_CREDENTIALS=/service-account.json
     volumes:
       - type: bind
         source: ${GOOGLE_APPLICATION_CREDENTIALS}
-        target: /sa.json
+        target: /service-account.json
         read_only: true
       - type: bind
         source: ../..
