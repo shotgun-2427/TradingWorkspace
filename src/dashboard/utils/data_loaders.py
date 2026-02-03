@@ -15,8 +15,7 @@ import yfinance as yf
 BUCKET_NAME = "wsb-hc-qasap-bucket-1"
 SIMULATIONS_AUDIT_PREFIX = "hcf/paper/simulations_audit"
 PRODUCTION_AUDIT_PREFIX = "hcf/paper/production_audit"
-#TODO: Make start date dynamic so extreme backtests can be aligned without losing dates
-NYSE = mcal.get_calendar('NYSE').schedule(start_date='2015/01/01', end_date=datetime.today().strftime('%Y-%m-%d'))
+NYSE = mcal.get_calendar('NYSE').schedule(start_date='1900/01/01', end_date=datetime.today().strftime('%Y-%m-%d'))
 
 @st.cache_resource
 def get_gcs_bucket() -> storage.Bucket:
