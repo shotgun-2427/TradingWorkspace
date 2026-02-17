@@ -2,7 +2,7 @@ import pandas as pd
 import streamlit as st
 import plotly.express as px
 import numpy as np
-from datetime import datetime
+from datetime import datetime, date, timedelta
 
 from src.dashboard.utils import (
     get_latest_production_audit,
@@ -25,6 +25,12 @@ def get_marginal_return_stream(df_base: pd.DataFrame, df_reduced: pd.DataFrame) 
     Returns:
         DataFrame with marginal daily returns of the marginal portfolio.
     """
+    df_base = df_base.copy()
+    df_reduced = df_reduced.copy()
+
+    df_base["date"] = pd.to_datetime(df_base["date"])
+    df_reduced["date"] = pd.to_datetime(df_reduced["date"])
+
     # Align on date
     merged = pd.merge(
         df_base[['date', 'daily_return']],
@@ -32,12 +38,18 @@ def get_marginal_return_stream(df_base: pd.DataFrame, df_reduced: pd.DataFrame) 
         on='date',
         suffixes=('_base', '_reduced')
     )
-
+    
     # Compute marginal daily return
     merged['daily_return'] = merged['daily_return_base'] - merged['daily_return_reduced']
 
-    return merged[['date', 'daily_return']]
-
+    # Build cumulative return + drawdown so we can reuse calculate_metrics_from_backtest unchanged
+    r = merged["daily_return"].astype(float)
+    equity = (1.0 + r).cumprod()
+    merged["cumulative_return"] = equity - 1.0
+    peak = equity.cummax()
+    merged["drawdown"] = (equity / peak) - 1.0
+    
+    return merged[["date", "daily_return", "cumulative_return", "drawdown"]]
 
 def calculate_metrics_from_backtest(df: pd.DataFrame) -> dict:
     """
@@ -123,56 +135,89 @@ def calculate_metrics_from_backtest(df: pd.DataFrame) -> dict:
 
 
 def app():
-    st.title("Backtest Visualization")
-    st.markdown(f"Latest Production Audit Date: {get_latest_production_audit()}")
+    # Header
+    latest_audit = get_latest_production_audit()
+
+    left, right = st.columns([3, 1])
+    with left:
+        st.title("Marginal Model Backtests")
+        st.caption("Compare model backtests and marginal contributions")
+    with right:
+        st.metric("Latest Production Audit", str(latest_audit))
+
+    st.divider()
 
     # Load available models and optimizers from the latest production audit
     models = get_production_audit_models()
-
-
-    # Streamlit multiselects
+    
+    # Controls
     selected_models = st.multiselect(
-        "Select Model Backtests to View",
-        options=models + [f"{model}_marginal" for model in models],
+        "Models",
+        options=models + [f"{m}_marginal" for m in models]
     )
 
-    # Expose selections for downstream plotting/processing
-    st.session_state.setdefault("selected_models", selected_models)
+    with st.expander("Controls", expanded=True):
+        st.session_state["selected_models"] = selected_models
 
-    # Date range selector
-    st.subheader("Select Date Range")
-    col1, col2 = st.columns(2)
-
-    # We'll determine the actual date range from the data below
-    # For now, set some default values
-    default_start = datetime(2024, 1, 1).date()
-    default_end = datetime.today().date()
-
-    with col1:
-        start_date = st.date_input(
-            "Start Date",
-            value=default_start,
-            key="start_date"
+        # Date controls
+        st.subheader("Date Range")
+        preset = st.radio(
+            "Preset",
+            options=["Custom", "3M", "6M", "1Y", "YTD"],
+            horizontal=True,
         )
 
-    with col2:
-        end_date = st.date_input(
-            "End Date",
-            value=default_end,
-            key="end_date"
-        )
+        # default range (only used if Custom)
+        default_start = datetime(2024, 1, 1).date()
+        default_end = datetime.today().date()
 
-    show_aggregate_portfolio = st.checkbox(
-        "Show Aggregate Portfolio Backtest",
-        value=False,
-        key="show_aggregate_portfolio"
-    )
-    # Option to overlay SPX (S&P 500) equity curve normalized to start at 1
-    show_spx = st.checkbox(
-        "Show S&P 500 Equity Curve",
-        value=False,
-        key="show_spx"
-    )
+        # Apply preset logic
+        if preset == "3M":
+            start_date = (date.today() - timedelta(days=90))
+            end_date = date.today()
+        elif preset == "6M":
+            start_date = (date.today() - timedelta(days=180))
+            end_date = date.today()
+        elif preset == "1Y":
+            start_date = (date.today() - timedelta(days=365))
+            end_date = date.today()
+        elif preset == "YTD":
+            start_date = date(date.today().year, 1, 1)
+            end_date = date.today()
+        else:
+            col1, col2 = st.columns(2)
+            with col1:
+                start_date = st.date_input(
+                    "Start Date",
+                    value=default_start,
+                    key="start_date"
+                )
+            with col2:
+                end_date = st.date_input(
+                    "End Date",
+                    value=default_end,
+                    key="end_date"
+                )
+
+        # Toggles
+        colA, colB = st.columns(2)
+        with colA:
+            show_aggregate_portfolio = st.checkbox(
+                "Show Aggregate Portfolio Backtest",
+                value=st.session_state.get("show_aggregate_portfolio", False),
+                key="show_aggregate_portfolio",
+            )
+        with colB:
+            show_spx = st.checkbox(
+                "Show S&P 500 Equity Curve",
+                value=st.session_state.get("show_spx", False),
+                key="show_spx",
+            )
+    
+    # Guardrail
+    if start_date > end_date:
+        st.error("Start date must be on or before end date.")
+        return
 
     # Build and plot combined equity curves for selected models and optimizers
     combined_series = {}
@@ -215,6 +260,9 @@ def app():
         daily_returns = df_filtered.set_index('date')['daily_return'].fillna(0)
         daily_returns.iloc[0] = 0 # set initial day to zero for proper cumulative calculation
         series = (1 + daily_returns).cumprod().rename(model)
+        df_filtered["cumulative_return"] = series.values - 1.0
+        peak = series.cummax()
+        df_filtered["drawdown"] = (series / peak).values - 1.0
         combined_series[model] = series
 
         # Calculate metrics from filtered data
@@ -244,12 +292,15 @@ def app():
         daily_returns.iloc[0] = 0 # set initial day to zero for proper cumulative calculation
         series_title = f"Aggregate Portfolio"
         series = (1 + daily_returns).cumprod().rename(series_title)
+        pdf_filtered["cumulative_return"] = series.values - 1.0
+        peak = series.cummax()
+        pdf_filtered["drawdown"] = (series / peak).values - 1.0
         combined_series[series_title] = series
 
         # Calculate metrics from filtered data
         try:
             metrics = calculate_metrics_from_backtest(pdf_filtered)
-            metrics_data[opt] = metrics
+            metrics_data["Portfolio"] = metrics
         except Exception as exc:
             st.warning(f"Could not calculate metrics for optimizer '{opt}': {exc}")
 
@@ -278,28 +329,59 @@ def app():
         except Exception as exc:
             st.warning(f"Could not fetch SPX data: {exc}")
 
-    if combined_series:
-        combined = pd.concat(combined_series.values(), axis=1)
-        # Reset index to have `date` as a column and melt to long form
-        combined = combined.reset_index()
-        long = combined.melt(id_vars='date', var_name='series', value_name='equity')
-        long['date'] = pd.to_datetime(long['date'])
+    if not combined_series:
+        st.caption("Select one or more models or enable overlays to view equity curves")
+        return
+    
+    combined = pd.concat(combined_series.values(), axis=1)
+    # Reset index to have `date` as a column and melt to long form
+    combined = combined.reset_index()
+    long = combined.melt(id_vars='date', var_name='series', value_name='equity')
+    long['date'] = pd.to_datetime(long['date'])
 
-        fig = px.line(
-            long,
-            x='date',
-            y='equity',
-            color='series',
-            labels={'date': 'Date', 'equity': 'Equity', 'series': 'Series'},
-            title='Equity Curves',
-        )
-        fig.update_traces(mode='lines')
-        fig.update_layout(legend_title_text='Series')
+    fig = px.line(
+        long,
+        x='date',
+        y='equity',
+        color='series',
+        labels={'date': 'Date', 'equity': 'Equity', 'series': 'Series'},
+        title='Equity Curves',
+    )
+    fig.update_traces(mode='lines')
+    fig.update_layout(legend_title_text='Series')
 
-        st.subheader('Equity Curves')
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info('Select one or more models or check the check boxes above to view their equity curves.')
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Metrics
+    if metrics_data:
+        st.subheader("Performance Metrics")
+        st.caption("For Selected Date Range")
+
+        # Convert dict-of-dicts into a nice table
+        metrics_df = pd.DataFrame(metrics_data).T
+
+        # Friendly formatting (percent columns)
+        percent_cols = ["total_return", "annualized_return", "annualized_volatility", "max_drawdown", "avg_drawdown", "win_rate"]
+        for c in percent_cols:
+            if c in metrics_df.columns:
+                metrics_df[c] = metrics_df[c] * 100
+
+        # reorder (only keep those that exist)
+        ordered = [
+            "total_return",
+            "annualized_return",
+            "annualized_volatility",
+            "sharpe_ratio",
+            "sortino_ratio",
+            "max_drawdown",
+            "avg_drawdown",
+            "win_rate",
+            "avg_daily_return",
+        ]
+        cols = [c for c in ordered if c in metrics_df.columns]
+        metrics_df = metrics_df[cols]
+
+        st.dataframe(metrics_df, use_container_width=True)
 
 
 if __name__ == "__main__":
