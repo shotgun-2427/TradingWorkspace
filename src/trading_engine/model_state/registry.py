@@ -1,9 +1,7 @@
-from typing import Dict
-
 from common.constants import ProcessingMode
 from trading_engine.model_state.catalogue.features import *
 
-FEATURES: Dict[str, dict] = {
+FEATURES = {
     "close_ma_10": {
         "func": moving_average("adjusted_close_1d", "close_ma_10", window=10),
         "mode": ProcessingMode.LAZY,

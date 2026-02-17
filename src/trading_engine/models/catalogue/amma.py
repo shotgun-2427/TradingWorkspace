@@ -3,6 +3,8 @@ from typing import Callable, Dict
 import polars as pl
 from polars import LazyFrame
 
+from common.bundles import ModelStateBundle
+
 
 def AMMA(
         ticker: str,
@@ -10,7 +12,7 @@ def AMMA(
         threshold: float = 0.0,
         long_enabled: bool = True,
         short_enabled: bool = False,
-) -> Callable[[LazyFrame], LazyFrame]:
+) -> Callable[[ModelStateBundle], LazyFrame]:
     """
     Adaptive Momentum Model Averaging (AMMA).
 
@@ -29,11 +31,12 @@ def AMMA(
 
     Returns
     -------
-    Callable[[LazyFrame], LazyFrame]
-        Function that takes a LazyFrame and returns a LazyFrame of weights.
+    Callable[[ModelStateBundle], LazyFrame]
+        Function that takes a ModelStateBundle and returns a LazyFrame of weights.
     """
 
-    def run_model(lf: LazyFrame) -> LazyFrame:
+    def run_model(bundle: ModelStateBundle) -> LazyFrame:
+        lf = bundle.model_state.lazy()
         sig_frames = []
 
         for window, weight in momentum_weights.items():

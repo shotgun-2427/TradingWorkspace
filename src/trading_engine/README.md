@@ -49,13 +49,58 @@ graph TD;
 
 ## Orchestration (Wiring)
 File: `trading_engine/core.py`
-- `create_model_state`: build `(model_state, prices)` from raw data.
-- `orchestrate_model_backtests`: run models; normalize outputs to the universe.
+- `read_data(include_supplemental=False)`: legacy default returns primary `LazyFrame`; with `True` returns `RawDataBundle`.
+- `create_model_state`: legacy default returns `(model_state, prices)`; bundle mode returns `(ModelStateBundle, prices)`.
+- `orchestrate_model_backtests`: supports both runner contracts:
+  - legacy (default): model receives filtered `LazyFrame`
+  - bundle (opt-in): set `"input_mode": "bundle"` in model registry entry
+  - auto fallback: when `input_mode` is omitted, runner signature is inferred (`bundle` arg / `ModelStateBundle` annotation)
 - `orchestrate_model_simulations`: simulate each model’s standalone portfolio.
 - `orchestrate_portfolio_aggregation`: apply aggregators; central clamp + L1.
 - `orchestrate_portfolio_optimizations` (optional): apply optimizers; central post‑processing.
 - `orchestrate_portfolio_simulations`: simulate aggregated/optimized portfolios.
 - `run_full_backtest`: one‑shot entry that returns all artifacts.
+
+## Quick Developer Guide (Old vs New)
+| Area | Old setup | New setup |
+|---|---|---|
+| Raw input | `lf = read_data()` | `raw_data_bundle = read_data(include_supplemental=True)` |
+| Model state | `model_state, prices = create_model_state(lf=...)` | `model_state_bundle, prices = create_model_state(raw_data_bundle=..., return_bundle=True)` |
+| Model runner input | `Callable[[LazyFrame], LazyFrame]` | `Callable[[ModelStateBundle], LazyFrame]` |
+| Registry hint | none | optional `"input_mode": "bundle"` |
+
+Why this is important:
+- Keeps current model development stable (legacy models still run as-is).
+- Enables gradual migration to supplemental/non-ticker data without a big-bang rewrite.
+- Lets new models use richer context (`supplemental_model_state`) while old models continue shipping.
+
+Minimal examples:
+```python
+# Old (still supported)
+lf = read_data()
+model_state, prices = create_model_state(
+    lf=lf, features=features, start_date=start_date, end_date=end_date, universe=universe
+)
+model_insights = orchestrate_model_backtests(
+    model_state=model_state, models=models, universe=universe
+)
+```
+
+```python
+# New (bundle path)
+raw_data_bundle = read_data(include_supplemental=True)
+model_state_bundle, prices = create_model_state(
+    raw_data_bundle=raw_data_bundle,
+    features=features,
+    start_date=start_date,
+    end_date=end_date,
+    universe=universe,
+    return_bundle=True,
+)
+model_insights = orchestrate_model_backtests(
+    model_state_bundle=model_state_bundle, models=models, universe=universe
+)
+```
 
 ## Components at a Glance
 | Directory | Purpose | Registry |
@@ -79,6 +124,8 @@ File: `trading_engine/core.py`
 
 ## Extending the System
 - **Add a model**: implement under `models/catalogue/`, register in `models/registry.py`.
+  - Legacy model: keep current `LazyFrame` signature (no extra registry flags).
+  - Bundle model (new): use `ModelStateBundle` signature and set `"input_mode": "bundle"` in registry.
 - **Add an aggregator**: implement under `aggregators/catalogue/`, register in `aggregators/registry.py`.
 - **Add an optimizer**: implement under `optimizers/catalogue/`, register in `optimizers/registry.py`.
 - **Add a risk model**: implement under `risk/catalogue/`, register in `risk/registry.py`.
@@ -93,5 +140,3 @@ File: `trading_engine/core.py`
 ## Notes & Assumptions
 - **Global clamps/budget** are applied centrally after aggregation/optimization. Component‑specific constraints (e.g., long‑only) can be added per component or via registry flags.
 - **Risk inputs** use daily log returns and rolling windows by default; alternate horizons/frequencies can be added via the risk registry.
-
-

@@ -57,11 +57,11 @@ async def setup() -> tuple:
 
 async def run_trading_engine(config: Config, writer: AsyncGCSWriter, current_date: str):
     with timed("production.read_data_duration"):
-        lf = read_data()
+        raw_data_bundle = read_data(include_supplemental=True)
 
     # ==== validate data (check if the latest date in the data is "current" date, otherwise it's not a trading day)
     latest_date = (
-        lf.select("date").sort("date", descending=True).first().collect().item()
+        raw_data_bundle.raw_records.select("date").sort("date", descending=True).first().collect().item()
     )
 
     if latest_date.strftime("%Y-%m-%d") != current_date:
@@ -79,21 +79,23 @@ async def run_trading_engine(config: Config, writer: AsyncGCSWriter, current_dat
             optimizers=getattr(config, "optimizers", None),
         )
 
-        model_state, prices = create_model_state(
-            lf=lf,
+        model_state_bundle, prices = create_model_state(
+            raw_data_bundle=raw_data_bundle,
             features=config.model_state_features,
             start_date=config.start_date,
             end_date=config.end_date,
             universe=config.universe,
             total_lookback_days=total_lookback_days,
+            return_bundle=True,
         )
-    await writer.save_polars(model_state, "model_state.csv")
+    await writer.save_polars(model_state_bundle.model_state, "model_state.csv")
+    await writer.save_polars(model_state_bundle.supplemental_model_state, "supplemental_model_state.csv")
     await writer.save_polars(prices, "prices.csv")
 
     # ==== orchestrate model backtests
     with timed("production.model_backtests_duration"):
         model_insights = orchestrate_model_backtests(
-            model_state=model_state, models=config.models, universe=config.universe
+            model_state_bundle=model_state_bundle, models=config.models, universe=config.universe
         )
     await asyncio.gather(
         *(

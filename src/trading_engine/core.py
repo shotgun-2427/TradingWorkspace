@@ -1,46 +1,59 @@
 import datetime
+import inspect
 from typing import List, Union, Dict, Sequence, Optional
 
 import polars as pl
 from hawk_backtester import HawkBacktester
-from polars import LazyFrame, DataFrame
+from polars import DataFrame, LazyFrame
 
+from common.bundles import RawDataBundle, ModelStateBundle
 from common.constants import ProcessingMode
 from common.logging import setup_logger
 from trading_engine.aggregators import AGGREGATORS
 from trading_engine.model_state import FEATURES
 from trading_engine.models import MODELS
 from trading_engine.optimizers import OPTIMIZERS
-from trading_engine.utils import calculate_calendar_lookback
+from trading_engine.utils import calculate_calendar_lookback, _read_parquet_data_from_gcs
 
 logger = setup_logger(__name__)
 
 pl.enable_string_cache()
 
 
-def read_data() -> LazyFrame:
-    """Read the raw data from the Parquet file in lazy mode."""
+def read_data(include_supplemental: bool = False) -> Union[LazyFrame, RawDataBundle]:
+    """Read raw data from Parquet in lazy mode."""
     BUCKET = "wsb-hc-qasap-bucket-1"
-    PREFIX = "hcf/raw_data/universal"
-    parquet_uri = f"gs://{BUCKET}/{PREFIX}/parquet/part-*.parquet"
-    return pl.scan_parquet(parquet_uri)
+    raw_records = _read_parquet_data_from_gcs(BUCKET, "hcf/raw_data/universal")
+
+    if not include_supplemental:
+        return raw_records
+
+    return RawDataBundle(
+        raw_records=raw_records,
+        raw_supplemental_records=_read_parquet_data_from_gcs(
+            BUCKET, "hcf/raw_data/universal_supplemental"
+        ),
+    )
 
 
 def create_model_state(
-        lf: LazyFrame,
-        features: list[str],
-        start_date: datetime.date,
-        end_date: datetime.date,
-        universe: List[str],
+        lf: Optional[LazyFrame] = None,
+        features: Optional[list[str]] = None,
+        start_date: Optional[datetime.date] = None,
+        end_date: Optional[datetime.date] = None,
+        universe: Optional[List[str]] = None,
         registry=None,
         total_lookback_days: Optional[int] = None,
-) -> tuple[DataFrame, DataFrame]:
+        raw_data_bundle: Optional[RawDataBundle] = None,
+        return_bundle: Optional[bool] = None,
+) -> tuple[Union[DataFrame, ModelStateBundle], DataFrame]:
     """
     Build model state with warmup lookback and eager feature support.
     Returns (model_state, prices) tuple.
     
     Args:
-        lf: LazyFrame containing raw data
+        lf: Legacy input data (primary raw records only)
+        raw_data_bundle: New input bundle containing primary + supplemental records
         features: List of feature names to compute
         start_date: Start date for the model state (after warmup)
         end_date: End date for the model state
@@ -49,7 +62,28 @@ def create_model_state(
         total_lookback_days: Optional total lookback days to extend data before start_date.
                            If provided, this overrides the calculated feature lookback.
                            If None, uses the maximum lookback from features.
+        return_bundle: When True returns ModelStateBundle, otherwise legacy DataFrame.
+                       Defaults to True when raw_data_bundle is provided, else False.
     """
+    if features is None or start_date is None or end_date is None or universe is None:
+        raise ValueError("features, start_date, end_date, and universe are required.")
+
+    if raw_data_bundle is not None and lf is not None:
+        raise ValueError("Provide either `lf` or `raw_data_bundle`, not both.")
+
+    if raw_data_bundle is None and lf is None:
+        raise ValueError("Provide either `lf` or `raw_data_bundle`.")
+
+    if return_bundle is None:
+        return_bundle = raw_data_bundle is not None
+
+    raw_records = raw_data_bundle.raw_records if raw_data_bundle is not None else lf
+    if raw_records is None:
+        raise ValueError("Failed to resolve raw records input.")
+
+    ###
+    # Model state 1: Raw records (data associated with a specific Hawk ID)
+    ###
     if not registry:
         registry = FEATURES
 
@@ -72,7 +106,7 @@ def create_model_state(
     buffer_start_date = start_date - datetime.timedelta(days=lookback_calendar_days)
 
     lf = (
-        lf.with_columns(pl.col("date").dt.date().alias("date"))
+        raw_records.with_columns(pl.col("date").dt.date().alias("date"))
         .filter(pl.col("date").is_between(buffer_start_date, end_date))
         .sort(["ticker", "date"])
     )
@@ -107,7 +141,74 @@ def create_model_state(
 
     prices = construct_prices(model_state, universe)
 
-    return model_state, prices
+    if not return_bundle:
+        return model_state, prices
+
+    if raw_data_bundle is None:
+        logger.warning(
+            "return_bundle=True was requested with legacy `lf` input; "
+            "supplemental_model_state will be empty."
+        )
+        supplemental_model_state = _empty_supplemental_model_state(model_state=model_state)
+    else:
+        supplemental_model_state = _build_supplemental_model_state(
+            raw_data_bundle.raw_supplemental_records
+        )
+
+    model_state_bundle = ModelStateBundle(
+        model_state=model_state,
+        supplemental_model_state=supplemental_model_state,
+    )
+
+    return model_state_bundle, prices
+
+
+def _empty_supplemental_model_state(model_state: Optional[DataFrame] = None) -> DataFrame:
+    if model_state is not None and "date" in model_state.columns:
+        return model_state.select("date").unique().sort("date")
+    return pl.DataFrame(schema={"date": pl.Date})
+
+
+def _build_supplemental_model_state(raw_supplemental_records: LazyFrame) -> DataFrame:
+    """
+    Build supplemental state from non-ticker records:
+      - normalize timestamp -> date
+      - pivot series_id columns
+    """
+    try:
+        sample = raw_supplemental_records.select("record_timestamp").limit(1).collect()
+        if sample.is_empty():
+            return _empty_supplemental_model_state()
+
+        timestamp_dtype = sample.schema["record_timestamp"]
+        base_type = timestamp_dtype.base_type() if hasattr(timestamp_dtype, "base_type") else timestamp_dtype
+
+        if timestamp_dtype == pl.Utf8:
+            date_expr = pl.col("record_timestamp").str.to_datetime(strict=False).dt.date()
+        elif base_type == pl.Datetime:
+            date_expr = pl.col("record_timestamp").dt.date()
+        else:
+            date_expr = pl.col("record_timestamp").cast(pl.Datetime, strict=False).dt.date()
+
+        supplemental_df = (
+            raw_supplemental_records
+            .with_columns(date_expr.alias("date"))
+            .drop("record_timestamp")
+            .collect()
+        )
+
+        if supplemental_df.is_empty():
+            return _empty_supplemental_model_state()
+
+        return supplemental_df.pivot(
+            index="date",
+            on="series_id",
+            values="value",
+            aggregate_function="first",
+        ).sort("date")
+    except Exception as e:
+        logger.warning(f"Could not load supplemental data: {e}. Creating empty supplemental_model_state.")
+        return _empty_supplemental_model_state()
 
 
 def _build_model_lazy_input(
@@ -115,6 +216,32 @@ def _build_model_lazy_input(
 ) -> pl.LazyFrame:
     cols = ["date", "ticker", *columns]
     return model_state.lazy().filter(pl.col("ticker").is_in(tickers)).select(cols)
+
+
+def _infer_model_input_mode(runner) -> str:
+    """
+    Infer model runner input mode when registry metadata is absent.
+    Defaults to legacy for safety.
+    """
+    try:
+        params = list(inspect.signature(runner).parameters.values())
+    except (TypeError, ValueError):
+        return "legacy"
+
+    if not params:
+        return "legacy"
+
+    first = params[0]
+    annotation = first.annotation
+    annotation_name = getattr(annotation, "__name__", str(annotation))
+
+    if annotation is ModelStateBundle or "ModelStateBundle" in annotation_name:
+        return "bundle"
+
+    if first.name in {"bundle", "model_state_bundle"}:
+        return "bundle"
+
+    return "legacy"
 
 
 def _ensure_lazy(obj: Union[pl.DataFrame, pl.LazyFrame]) -> pl.LazyFrame:
@@ -237,17 +364,39 @@ def calculate_max_lookback(
 
 
 def orchestrate_model_backtests(
-        model_state: DataFrame,
-        models: List[str],
-        universe: List[str],
+        model_state: Optional[DataFrame] = None,
+        models: Optional[List[str]] = None,
+        universe: Optional[List[str]] = None,
         clamp_bounds: tuple[float, float] = (-1.0, 1.0),
         registry=MODELS,
+        model_state_bundle: Optional[ModelStateBundle] = None,
 ) -> Dict[str, pl.LazyFrame]:
     """
     Run selected models and return per-model LazyFrames padded to the full universe:
       { model_name: LazyFrame(["date"] + universe) }, weights in [-1, 1].
     No aggregation or L1 normalization here.
+
+    Compatibility modes:
+      - legacy (default): runner receives filtered LazyFrame (old framework)
+      - bundle: runner receives full ModelStateBundle (new framework)
+
+    Model registry can opt into bundle mode with:
+      "input_mode": "bundle"
     """
+    if models is None or universe is None:
+        raise ValueError("`models` and `universe` are required.")
+
+    if model_state_bundle is None:
+        if model_state is None:
+            raise ValueError("Provide `model_state` or `model_state_bundle`.")
+        model_state_bundle = ModelStateBundle(
+            model_state=model_state,
+            supplemental_model_state=_empty_supplemental_model_state(model_state=model_state),
+        )
+
+    if model_state is None:
+        model_state = model_state_bundle.model_state
+
     lo, hi = clamp_bounds
     results: Dict[str, pl.LazyFrame] = {}
 
@@ -256,12 +405,35 @@ def orchestrate_model_backtests(
             raise KeyError(f"Unknown model: {name}")
 
         spec = registry[name]
-        tickers: List[str] = spec["tickers"]  # input tickers needed by this model
-        columns: List[str] = spec["columns"]
-        runner = spec["function"]  # Callable[[LazyFrame], DataFrame|LazyFrame]
+        runner = spec["function"]
+        input_mode = spec.get("input_mode", _infer_model_input_mode(runner))
 
-        lf_in = _build_model_lazy_input(model_state, tickers=tickers, columns=columns)
-        out = _ensure_lazy(runner(lf_in))  # ["date", <traded tickers...>]
+        if input_mode == "bundle":
+            out = _ensure_lazy(runner(model_state_bundle))
+        elif input_mode == "legacy":
+            tickers: List[str] = spec.get("tickers", [])
+            columns: List[str] = spec.get("columns", [])
+            if not tickers and not columns:
+                # No legacy slice metadata usually means this is actually a bundle runner.
+                if "input_mode" not in spec:
+                    out = _ensure_lazy(runner(model_state_bundle))
+                    out = _coerce_weights_to_float(out)  # float weights
+                    out = _clamp_weights(out, lo, hi)  # clamp to bounds
+                    out = _pad_to_universe(out, universe)  # add missing tickers as 0.0, reorder
+                    results[name] = out
+                    continue
+                raise KeyError(
+                    f"Model '{name}' is missing legacy input spec ('tickers'/'columns'). "
+                    "Set input_mode='bundle' for bundle-based models."
+                )
+            lf_in = _build_model_lazy_input(model_state, tickers=tickers, columns=columns)
+            out = _ensure_lazy(runner(lf_in))
+        else:
+            raise ValueError(
+                f"Unsupported input_mode '{input_mode}' for model '{name}'. "
+                "Expected 'legacy' or 'bundle'."
+            )
+
         out = _coerce_weights_to_float(out)  # float weights
         out = _clamp_weights(out, lo, hi)  # clamp to bounds
         out = _pad_to_universe(out, universe)  # add missing tickers as 0.0, reorder
@@ -562,19 +734,20 @@ def run_full_backtest(
     )
 
     # Load data and create model state
-    lf = read_data()
-    model_state, prices = create_model_state(
-        lf=lf,
+    raw_data_bundle = read_data(include_supplemental=True)
+    model_state_bundle, prices = create_model_state(
+        raw_data_bundle=raw_data_bundle,
         features=features,
         start_date=start_date,
         end_date=end_date,
         universe=universe,
         total_lookback_days=total_lookback_days,
+        return_bundle=True,
     )
 
     # Run models
     model_results = orchestrate_model_backtests(
-        model_state=model_state,
+        model_state_bundle=model_state_bundle,
         models=models,
         universe=universe,
         registry=model_registry,
