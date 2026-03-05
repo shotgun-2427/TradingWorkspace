@@ -170,7 +170,7 @@ jobs:
 
           FULL_IMAGE="$IMAGE:$TAG"
           deploy_job "production-live-job" "$FULL_IMAGE" --set-env-vars=environment=prod,variant=live,RUN_MODE=production,GITHUB_ACTIONS=true,PIPELINE_PROFILE=live,NEWRELIC_API_KEY=$NEWRELIC_API_KEY,IB_HOST=$IB_HOST,IB_PORT=$IB_PORT,IB_CLIENT_ID=2
-          deploy_scheduler production-live-scheduler "45 14 * * 1-5" production-live-job "America/Chicago"
+          deploy_scheduler production-live-scheduler "40 14 * * 1-5" production-live-job "America/Chicago"
 
       - name: Notify Teams
         if: success()
