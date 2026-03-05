@@ -1,6 +1,6 @@
 Go to root directory of the project
 ```
-docker build -t paper-service -f src/production/paper/Dockerfile .
+docker build -t paper-service -f src/production/pipeline/Dockerfile .
 ```
 
 ```

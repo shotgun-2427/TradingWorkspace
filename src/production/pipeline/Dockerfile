@@ -9,7 +9,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
-COPY src/production/paper/requirements.txt .
+COPY src/production/pipeline/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy MOSEK license
@@ -18,11 +18,12 @@ COPY mosek.lic /root/mosek/mosek.lic
 ENV MOSEKLM_LICENSE_FILE=/root/mosek/mosek.lic
 
 # Copy source code
-COPY src/production/paper /app/production/paper
-COPY src/production/simulations/config.yaml /app/production/simulations/config.yaml
+COPY src/production/pipeline /app/production/pipeline
+COPY src/production/simulations /app/production/simulations
+COPY src/production/runtime /app/production/runtime
 COPY src/common /app/common
 COPY src/trading_engine /app/trading_engine
 
 ENV PYTHONPATH=/app/
 
-CMD ["python", "production/paper/main.py"]
+CMD ["python", "production/pipeline/main.py"]

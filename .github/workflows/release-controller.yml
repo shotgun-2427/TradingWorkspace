@@ -16,8 +16,16 @@ on:
         description: 'Deploy Production Paper?'
         type: boolean
         default: false
+      deploy_prod_live:
+        description: 'Deploy Production Live?'
+        type: boolean
+        default: false
       deploy_sim_paper:
         description: 'Deploy Simulations Paper?'
+        type: boolean
+        default: false
+      deploy_sim_live:
+        description: 'Deploy Simulations Live?'
         type: boolean
         default: false
 
@@ -26,9 +34,6 @@ permissions:
   id-token: write
 
 jobs:
-  # ==================================================================
-  # JOB 1: PRODUCTION PAPER
-  # ==================================================================
   release-prod-paper:
     name: Release Prod Paper
     if: ${{ inputs.deploy_prod_paper == true }}
@@ -61,7 +66,7 @@ jobs:
           PROJECT_ID="wsb-hc-qasap-ae2e"
           IMAGE="production-paper"
           TAG="${{ steps.tag.outputs.new_tag }}"
-          docker buildx build --platform linux/amd64 -t gcr.io/$PROJECT_ID/$IMAGE:$TAG -t gcr.io/$PROJECT_ID/$IMAGE:latest -f src/production/paper/Dockerfile . --push
+          docker buildx build --platform linux/amd64 -t gcr.io/$PROJECT_ID/$IMAGE:$TAG -t gcr.io/$PROJECT_ID/$IMAGE:latest -f src/production/pipeline/Dockerfile . --push
 
       - name: Deploy Cloud Run
         env:
@@ -76,14 +81,11 @@ jobs:
         run: |
           deploy_job() { gcloud run jobs update "$1" --image "gcr.io/$PROJECT_ID/$2" --region "$REGION" --service-account "$SERVICE_ACCOUNT" --vpc-connector=run-conn-us-east4 --vpc-egress=private-ranges-only --max-retries 3 "${@:3}" || gcloud run jobs create "$1" --image "gcr.io/$PROJECT_ID/$2" --region "$REGION" --service-account "$SERVICE_ACCOUNT" --vpc-connector=run-conn-us-east4 --vpc-egress=private-ranges-only --max-retries 3 "${@:3}"; }
           deploy_scheduler() { gcloud scheduler jobs update http "$1" --location="$REGION" --schedule="$2" --time-zone="$4" --uri="https://$REGION-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/$PROJECT_ID/jobs/$3:run" --http-method=POST --oauth-service-account-email="$SERVICE_ACCOUNT" --oauth-token-scope="https://www.googleapis.com/auth/cloud-platform" || gcloud scheduler jobs create http "$1" --location="$REGION" --schedule="$2" --time-zone="$4" --uri="https://$REGION-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/$PROJECT_ID/jobs/$3:run" --http-method=POST --oauth-service-account-email="$SERVICE_ACCOUNT" --oauth-token-scope="https://www.googleapis.com/auth/cloud-platform"; }
-          
+
           FULL_IMAGE="$IMAGE:$TAG"
-          deploy_job "production-paper-job" "$FULL_IMAGE" --set-env-vars=environment=prod,variant=paper,NEWRELIC_API_KEY=$NEWRELIC_API_KEY,IB_HOST=$IB_HOST,IB_PORT=$IB_PORT,IB_CLIENT_ID=1
+          deploy_job "production-paper-job" "$FULL_IMAGE" --set-env-vars=environment=prod,variant=paper,RUN_MODE=production,GITHUB_ACTIONS=true,PIPELINE_PROFILE=paper,NEWRELIC_API_KEY=$NEWRELIC_API_KEY,IB_HOST=$IB_HOST,IB_PORT=$IB_PORT,IB_CLIENT_ID=1
           deploy_scheduler production-paper-scheduler "40 14 * * 1-5" production-paper-job "America/Chicago"
 
-      # -----------------------------------------------------------
-      # NOTIFY TEAMS (PYTHON)
-      # -----------------------------------------------------------
       - name: Notify Teams
         if: success()
         uses: actions/setup-python@v4
@@ -105,27 +107,105 @@ jobs:
           import os
           import subprocess
 
-          # Get commit message safely
           commit_msg = subprocess.getoutput('git log -1 --format=%s')
-
-          # Initialize card
           myTeamsMessage = pymsteams.connectorcard(os.environ['TEAMS_WEBHOOK_URL'])
-          
-          # Build the message text
           msg = f'''
-          🚀 New Deployment  
-          **Pipeline:** {os.environ['PIPELINE']}  
-          **Version:** {os.environ['VERSION']}  
-          **Commit:** {commit_msg}  
+          🚀 New Deployment
+          **Pipeline:** {os.environ['PIPELINE']}
+          **Version:** {os.environ['VERSION']}
+          **Commit:** {commit_msg}
           **Executed by:** {os.environ['ACTOR']}
           '''
           myTeamsMessage.text(msg)
           myTeamsMessage.send()
           "
 
-  # ==================================================================
-  # JOB 2: SIMULATIONS PAPER
-  # ==================================================================
+  release-prod-live:
+    name: Release Prod Live
+    if: ${{ inputs.deploy_prod_live == true }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+
+      - name: Bump version
+        id: tag
+        uses: mathieudutour/github-tag-action@v6.2
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          default_bump: ${{ inputs.release_level }}
+          tag_prefix: "prod-live-v"
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Configure Docker auth
+        run: gcloud auth configure-docker
+
+      - name: Build Docker
+        run: |
+          PROJECT_ID="wsb-hc-qasap-ae2e"
+          IMAGE="production-live"
+          TAG="${{ steps.tag.outputs.new_tag }}"
+          docker buildx build --platform linux/amd64 -t gcr.io/$PROJECT_ID/$IMAGE:$TAG -t gcr.io/$PROJECT_ID/$IMAGE:latest -f src/production/pipeline/Dockerfile . --push
+
+      - name: Deploy Cloud Run
+        env:
+          PROJECT_ID: wsb-hc-qasap-ae2e
+          REGION: us-east4
+          SERVICE_ACCOUNT: prod-job-runner@wsb-hc-qasap-ae2e.iam.gserviceaccount.com
+          NEWRELIC_API_KEY: ${{ secrets.NEWRELIC_API_KEY }}
+          IB_HOST: 10.4.0.2
+          IB_PORT: 4001
+          IMAGE: production-live
+          TAG: ${{ steps.tag.outputs.new_tag }}
+        run: |
+          deploy_job() { gcloud run jobs update "$1" --image "gcr.io/$PROJECT_ID/$2" --region "$REGION" --service-account "$SERVICE_ACCOUNT" --vpc-connector=run-conn-us-east4 --vpc-egress=private-ranges-only --max-retries 3 "${@:3}" || gcloud run jobs create "$1" --image "gcr.io/$PROJECT_ID/$2" --region "$REGION" --service-account "$SERVICE_ACCOUNT" --vpc-connector=run-conn-us-east4 --vpc-egress=private-ranges-only --max-retries 3 "${@:3}"; }
+          deploy_scheduler() { gcloud scheduler jobs update http "$1" --location="$REGION" --schedule="$2" --time-zone="$4" --uri="https://$REGION-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/$PROJECT_ID/jobs/$3:run" --http-method=POST --oauth-service-account-email="$SERVICE_ACCOUNT" --oauth-token-scope="https://www.googleapis.com/auth/cloud-platform" || gcloud scheduler jobs create http "$1" --location="$REGION" --schedule="$2" --time-zone="$4" --uri="https://$REGION-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/$PROJECT_ID/jobs/$3:run" --http-method=POST --oauth-service-account-email="$SERVICE_ACCOUNT" --oauth-token-scope="https://www.googleapis.com/auth/cloud-platform"; }
+
+          FULL_IMAGE="$IMAGE:$TAG"
+          deploy_job "production-live-job" "$FULL_IMAGE" --set-env-vars=environment=prod,variant=live,RUN_MODE=production,GITHUB_ACTIONS=true,PIPELINE_PROFILE=live,NEWRELIC_API_KEY=$NEWRELIC_API_KEY,IB_HOST=$IB_HOST,IB_PORT=$IB_PORT,IB_CLIENT_ID=2
+          deploy_scheduler production-live-scheduler "45 14 * * 1-5" production-live-job "America/Chicago"
+
+      - name: Notify Teams
+        if: success()
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Run Notification Script
+        if: success()
+        env:
+          TEAMS_WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
+          VERSION: ${{ steps.tag.outputs.new_tag }}
+          ACTOR: ${{ github.actor }}
+          PIPELINE: "Production Live"
+          REPO_URL: "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+        run: |
+          pip install pymsteams
+          python -c "
+          import pymsteams
+          import os
+          import subprocess
+
+          commit_msg = subprocess.getoutput('git log -1 --format=%s')
+          myTeamsMessage = pymsteams.connectorcard(os.environ['TEAMS_WEBHOOK_URL'])
+          msg = f'''
+          🚀 New Deployment
+          **Pipeline:** {os.environ['PIPELINE']}
+          **Version:** {os.environ['VERSION']}
+          **Commit:** {commit_msg}
+          **Executed by:** {os.environ['ACTOR']}
+          '''
+          myTeamsMessage.text(msg)
+          myTeamsMessage.send()
+          "
+
   release-sim-paper:
     name: Release Sim Paper
     if: ${{ inputs.deploy_sim_paper == true }}
@@ -171,14 +251,11 @@ jobs:
         run: |
           deploy_job() { gcloud run jobs update "$1" --image "gcr.io/$PROJECT_ID/$2" --region "$REGION" --service-account "$SERVICE_ACCOUNT" --vpc-connector=run-conn-us-east4 --vpc-egress=private-ranges-only --max-retries 3 "${@:3}" || gcloud run jobs create "$1" --image "gcr.io/$PROJECT_ID/$2" --region "$REGION" --service-account "$SERVICE_ACCOUNT" --vpc-connector=run-conn-us-east4 --vpc-egress=private-ranges-only --max-retries 3 "${@:3}"; }
           deploy_scheduler() { gcloud scheduler jobs update http "$1" --location="$REGION" --schedule="$2" --time-zone="$4" --uri="https://$REGION-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/$PROJECT_ID/jobs/$3:run" --http-method=POST --oauth-service-account-email="$SERVICE_ACCOUNT" --oauth-token-scope="https://www.googleapis.com/auth/cloud-platform" || gcloud scheduler jobs create http "$1" --location="$REGION" --schedule="$2" --time-zone="$4" --uri="https://$REGION-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/$PROJECT_ID/jobs/$3:run" --http-method=POST --oauth-service-account-email="$SERVICE_ACCOUNT" --oauth-token-scope="https://www.googleapis.com/auth/cloud-platform"; }
-          
+
           FULL_IMAGE="$IMAGE:$TAG"
-          deploy_job "simulations-paper-job" "$FULL_IMAGE" --set-env-vars=environment=prod,variant=paper,NEWRELIC_API_KEY=$NEWRELIC_API_KEY --cpu=1 --memory=1Gi --tasks=1
+          deploy_job "simulations-paper-job" "$FULL_IMAGE" --set-env-vars=environment=prod,variant=paper,RUN_MODE=production,GITHUB_ACTIONS=true,SIMULATION_PROFILE=paper,NEWRELIC_API_KEY=$NEWRELIC_API_KEY --cpu=1 --memory=1Gi --tasks=1
           deploy_scheduler simulations-paper-scheduler "0 19 * * 1-5" simulations-paper-job "America/Chicago"
 
-      # -----------------------------------------------------------
-      # NOTIFY TEAMS (PYTHON)
-      # -----------------------------------------------------------
       - name: Notify Teams
         if: success()
         uses: actions/setup-python@v4
@@ -201,14 +278,96 @@ jobs:
           import subprocess
 
           commit_msg = subprocess.getoutput('git log -1 --format=%s')
-
           myTeamsMessage = pymsteams.connectorcard(os.environ['TEAMS_WEBHOOK_URL'])
-
           msg = f'''
-          🚀 New Deployment  
-          **Pipeline:** {os.environ['PIPELINE']}  
-          **Version:** {os.environ['VERSION']}  
-          **Commit:** {commit_msg}  
+          🚀 New Deployment
+          **Pipeline:** {os.environ['PIPELINE']}
+          **Version:** {os.environ['VERSION']}
+          **Commit:** {commit_msg}
+          **Executed by:** {os.environ['ACTOR']}
+          '''
+          myTeamsMessage.text(msg)
+          myTeamsMessage.send()
+          "
+
+  release-sim-live:
+    name: Release Sim Live
+    if: ${{ inputs.deploy_sim_live == true }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+
+      - name: Bump version
+        id: tag
+        uses: mathieudutour/github-tag-action@v6.2
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          default_bump: ${{ inputs.release_level }}
+          tag_prefix: "sim-live-v"
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Configure Docker auth
+        run: gcloud auth configure-docker
+
+      - name: Build Docker
+        run: |
+          PROJECT_ID="wsb-hc-qasap-ae2e"
+          IMAGE="simulations-live"
+          TAG="${{ steps.tag.outputs.new_tag }}"
+          docker buildx build --platform linux/amd64 -t gcr.io/$PROJECT_ID/$IMAGE:$TAG -t gcr.io/$PROJECT_ID/$IMAGE:latest -f src/production/simulations/Dockerfile . --push
+
+      - name: Deploy Cloud Run
+        env:
+          PROJECT_ID: wsb-hc-qasap-ae2e
+          REGION: us-east4
+          SERVICE_ACCOUNT: prod-job-runner@wsb-hc-qasap-ae2e.iam.gserviceaccount.com
+          NEWRELIC_API_KEY: ${{ secrets.NEWRELIC_API_KEY }}
+          IMAGE: simulations-live
+          TAG: ${{ steps.tag.outputs.new_tag }}
+        run: |
+          deploy_job() { gcloud run jobs update "$1" --image "gcr.io/$PROJECT_ID/$2" --region "$REGION" --service-account "$SERVICE_ACCOUNT" --vpc-connector=run-conn-us-east4 --vpc-egress=private-ranges-only --max-retries 3 "${@:3}" || gcloud run jobs create "$1" --image "gcr.io/$PROJECT_ID/$2" --region "$REGION" --service-account "$SERVICE_ACCOUNT" --vpc-connector=run-conn-us-east4 --vpc-egress=private-ranges-only --max-retries 3 "${@:3}"; }
+          deploy_scheduler() { gcloud scheduler jobs update http "$1" --location="$REGION" --schedule="$2" --time-zone="$4" --uri="https://$REGION-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/$PROJECT_ID/jobs/$3:run" --http-method=POST --oauth-service-account-email="$SERVICE_ACCOUNT" --oauth-token-scope="https://www.googleapis.com/auth/cloud-platform" || gcloud scheduler jobs create http "$1" --location="$REGION" --schedule="$2" --time-zone="$4" --uri="https://$REGION-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/$PROJECT_ID/jobs/$3:run" --http-method=POST --oauth-service-account-email="$SERVICE_ACCOUNT" --oauth-token-scope="https://www.googleapis.com/auth/cloud-platform"; }
+
+          FULL_IMAGE="$IMAGE:$TAG"
+          deploy_job "simulations-live-job" "$FULL_IMAGE" --set-env-vars=environment=prod,variant=live,RUN_MODE=production,GITHUB_ACTIONS=true,SIMULATION_PROFILE=live,NEWRELIC_API_KEY=$NEWRELIC_API_KEY --cpu=1 --memory=1Gi --tasks=1
+          deploy_scheduler simulations-live-scheduler "5 19 * * 1-5" simulations-live-job "America/Chicago"
+
+      - name: Notify Teams
+        if: success()
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Run Notification Script
+        if: success()
+        env:
+          TEAMS_WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
+          VERSION: ${{ steps.tag.outputs.new_tag }}
+          ACTOR: ${{ github.actor }}
+          PIPELINE: "Simulations Live"
+          REPO_URL: "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+        run: |
+          pip install pymsteams
+          python -c "
+          import pymsteams
+          import os
+          import subprocess
+
+          commit_msg = subprocess.getoutput('git log -1 --format=%s')
+          myTeamsMessage = pymsteams.connectorcard(os.environ['TEAMS_WEBHOOK_URL'])
+          msg = f'''
+          🚀 New Deployment
+          **Pipeline:** {os.environ['PIPELINE']}
+          **Version:** {os.environ['VERSION']}
+          **Commit:** {commit_msg}
           **Executed by:** {os.environ['ACTOR']}
           '''
           myTeamsMessage.text(msg)

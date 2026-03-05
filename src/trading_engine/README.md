@@ -117,9 +117,11 @@ model_insights = orchestrate_model_backtests(
 - **Alignment**: orchestrator pads/drops/reorders tickers to match the configured universe.
 
 ## Configuration & Production
-- **Config**: `src/production/paper/config.yaml`
-  - **keys**: `model_state_features`, `models`, `aggregators`, optional `portfolio_optimizers`, `universe`, `start_date`, `end_date`.
-- **Entrypoint**: `src/production/paper/main.py`
+- **Execution configs**: `src/production/pipeline/configs/*.yaml`
+  - Example files: `paper.yaml`, `live.yaml`
+  - Simulations overrides live at `src/production/simulations/overrides.yaml` and are merged onto the matching execution profile (`paper` or `live`)
+  - **keys**: `model_state_features`, `models`, `aggregators`, optional `optimizers`, `universe`, `start_date`, `end_date`.
+- **Entrypoint**: `src/production/pipeline/main.py`
   - Runs the full pipeline, persists artifacts (e.g., to GCS), and prepares execution instructions.
 
 ## Extending the System

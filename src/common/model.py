@@ -33,6 +33,7 @@ class Config:
     notifications: dict
     optimizers: Optional[list[str]] = None
     cash_buffer: float = 0.0
+    execution_portfolio: Optional[str] = None
 
     def __post_init__(self):
         if isinstance(self.ib_gateway, dict):

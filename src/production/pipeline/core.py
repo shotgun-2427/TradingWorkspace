@@ -37,16 +37,19 @@ def construct_goal_positions(
         )
 
     def _latest_row(df: DataFrame) -> Dict[str, Any]:
+        """Return the last row of a frame as a dictionary."""
         if "date" in df.columns:
             df = df.sort("date")
         return df.tail(1).to_dicts()[0]
 
     def _num(x: Any) -> bool:
+        """Return True when a value is numeric and not NaN."""
         return isinstance(x, (int, float)) and not (
                 isinstance(x, float) and math.isnan(x)
         )
 
     def _canon(sym: str) -> str:
+        """Normalize a ticker by removing any market suffix."""
         return sym.split("-")[0]
 
     latest_w = _latest_row(insights)
@@ -156,6 +159,7 @@ def construct_rebalance_orders(
         raise ValueError(f"'targets' is missing columns: {sorted(missing)}")
 
     def _canon(sym: str) -> str:
+        """Normalize a ticker by removing any market suffix."""
         return sym.split("-")[0]
 
     # Map canonical -> full ticker and target shares
@@ -266,6 +270,7 @@ def to_ibkr_basket_csv(
         return ",".join(header) + "\n"
 
     def _canon(sym: str) -> str:
+        """Normalize a ticker symbol for IBKR basket output."""
         # strip region suffixes like '-US' / '.US' if present
         s = sym.split("-")[0]
         s = re.sub(r"\.US$", "", s, flags=re.IGNORECASE)

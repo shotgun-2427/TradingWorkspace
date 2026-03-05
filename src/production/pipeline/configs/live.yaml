@@ -1,4 +1,4 @@
-start_date: 2004-01-01
+start_date: 2024-01-01
 end_date: 2026-12-31
 universe: [
   TLT-US, IEI-US, SHY-US, BIL-US, SLV-US, GLD-US,
@@ -16,13 +16,14 @@ models: [
 ]
 aggregators: [ model_mvo_amma_constrained ]
 optimizers: [ mean_variance_constrained ]
+execution_portfolio: mean_variance_constrained
 
-cash_buffer: 5000 # USD buffer to maintain in the account
+cash_buffer: 0.005 # % of NAV buffer to maintain in the account (0.5%)
 
 ib_gateway:
   host: 127.0.0.1
-  port: 4002
-  client_id: 1
+  port: 4001
+  client_id: 2
   flex_web_token: 167172104920512086554752
   nav_flex_query_id: 1323165
   fund_inception_date: 2025-10-15

@@ -9,9 +9,11 @@ on:
         type: choice
         options:
           - production-paper
+          - production-live
           - simulations-paper
+          - simulations-live
       target_tag:
-        description: 'Target Tag (e.g. prod-paper-v1.0.4 or sim-paper-v1.1.0)'
+        description: 'Target Tag (e.g. prod-paper-v1.0.4, prod-live-v1.0.1, sim-paper-v1.1.0, sim-live-v1.0.0)'
         required: true
         type: string
 
@@ -49,8 +51,12 @@ jobs:
           # Map selection to actual Job Name
           if [ "$SERVICE_NAME" == "production-paper" ]; then
             JOB_NAME="production-paper-job"
+          elif [ "$SERVICE_NAME" == "production-live" ]; then
+            JOB_NAME="production-live-job"
           elif [ "$SERVICE_NAME" == "simulations-paper" ]; then
             JOB_NAME="simulations-paper-job"
+          elif [ "$SERVICE_NAME" == "simulations-live" ]; then
+            JOB_NAME="simulations-live-job"
           fi
 
           # Update the Job to point to the old image tag
