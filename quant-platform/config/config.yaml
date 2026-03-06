@@ -1,0 +1,25 @@
+universe:
+  - SPY
+  - QQQ
+  - IWM
+  - TLT
+  - GLD
+
+data_source: fmp
+
+data:
+  cache_path: data/cache/prices.parquet
+
+execution:
+  broker: ibkr
+  host: 127.0.0.1
+  port: 7497
+  client_id: 1
+
+backtest:
+  start_date: 2015-01-01
+  end_date: 2024-01-01
+  initial_capital: 100000
+
+model:
+  name: zscore
