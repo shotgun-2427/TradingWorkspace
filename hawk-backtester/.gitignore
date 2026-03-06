@@ -1,0 +1,69 @@
+# Rust ignores
+/target/
+**/*.rs.bk
+Cargo.lock
+debug/
+rls/
+
+# Python ignores
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.env
+.venv
+venv/
+ENV/
+
+# IDE specific
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Project specific
+service_account.json
+
+# OS specific
+.DS_Store
+Thumbs.db
+
+# Poetry
+poetry.lock
+dist/
+
+# Compiled extensions
+python/hawk_backtester/*.so
+python/hawk_backtester/*.pyd
+EOF
+
+# Tests and data
+/tests
+/tests/data
+
+.pytest_cache/
+
+# data directory
+# data/
+outputs/
+.envrc
+
+backtest_metrics.csv
+backtest_results.csv
+.direnv/

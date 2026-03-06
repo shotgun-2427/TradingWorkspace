@@ -1,0 +1,191 @@
+name: CI / Build / Deploy
+
+on:
+  push:
+
+jobs:
+  # 1) Run tests on every branch
+  test:
+    name: Test & Code Coverage
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Poetry
+        run: curl -sSL https://install.python-poetry.org | python3 -
+
+      - name: Install dependencies
+        run: poetry install --no-interaction
+
+      - name: Run pytest with coverage threshold
+        run: poetry run pytest --cov=src/pipeline --cov-fail-under=80
+
+  # 2) Build (only on main, after tests pass)
+  build:
+    name: Build & Push Docker Images
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Configure Docker for GCR
+        run: gcloud auth configure-docker
+
+      - name: Build and push Docker images
+        run: |
+          # Read config values
+          PROJECT_ID=$(yq '.gcp.project_id' config/pipelines.yaml)
+
+          docker buildx create --use || echo "Builder already exists"
+
+          # Build and push each pipeline's Docker image
+          for pipeline in $(yq '.pipelines[].name' config/pipelines.yaml); do
+            # Convert pipeline name to directory format (dashes to underscores)
+            dir_name=$(echo "$pipeline" | tr '-' '_')
+
+            echo "Building $pipeline from src/scheduler/$dir_name/Dockerfile..."
+
+            docker buildx build \
+              --platform linux/amd64 \
+              -t "gcr.io/$PROJECT_ID/$pipeline" \
+              -f "src/scheduler/$dir_name/Dockerfile" . \
+              --push
+          done
+
+  # 3) Deploy (only on main, after build)
+  deploy:
+    name: Deploy to Cloud Run & Scheduler
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.ref == 'refs/heads/main'
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up gcloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: wsb-hc-qasap-ae2e
+
+      - name: Deploy Cloud Run Jobs and Scheduler
+        env:
+          FACTSET_USERNAME: ${{ secrets.FACTSET_USERNAME }}
+          FACTSET_API_KEY: ${{ secrets.FACTSET_API_KEY }}
+          NEWRELIC_API_KEY: ${{ secrets.NEWRELIC_API_KEY }}
+          EIA_API_KEY: $${{ secrets.EIA_API_KEY }}
+        run: |
+          # Read GCP config
+          PROJECT_ID=$(yq '.gcp.project_id' config/pipelines.yaml)
+          REGION=$(yq '.gcp.region' config/pipelines.yaml)
+          SERVICE_ACCOUNT_EMAIL=$(yq '.gcp.service_account' config/pipelines.yaml)
+
+          # Read default resource settings
+          DEFAULT_CPU=$(yq '.defaults.cpu' config/pipelines.yaml)
+          DEFAULT_MEMORY=$(yq '.defaults.memory' config/pipelines.yaml)
+          DEFAULT_MAX_RETRIES=$(yq '.defaults.max_retries' config/pipelines.yaml)
+
+          deploy_job() {
+            local JOB_NAME=$1
+            local IMAGE=$2
+            local CPU=$3
+            local MEMORY=$4
+            local MAX_RETRIES=$5
+
+            echo "Deploying Cloud Run job: $JOB_NAME"
+
+            gcloud run jobs update "$JOB_NAME" \
+              --image "gcr.io/$PROJECT_ID/$IMAGE" \
+              --region "$REGION" \
+              --service-account "$SERVICE_ACCOUNT_EMAIL" \
+              --max-retries "$MAX_RETRIES" \
+              --cpu "$CPU" \
+              --memory "$MEMORY" \
+              --set-env-vars="environment=prod,FACTSET_USERNAME=$FACTSET_USERNAME,FACTSET_API_KEY=$FACTSET_API_KEY,NEWRELIC_API_KEY=$NEWRELIC_API_KEY,EIA_API_KEY=$EIA_API_KEY" || \
+            gcloud run jobs create "$JOB_NAME" \
+              --image "gcr.io/$PROJECT_ID/$IMAGE" \
+              --region "$REGION" \
+              --service-account "$SERVICE_ACCOUNT_EMAIL" \
+              --max-retries "$MAX_RETRIES" \
+              --cpu "$CPU" \
+              --memory "$MEMORY" \
+              --set-env-vars="environment=prod,FACTSET_USERNAME=$FACTSET_USERNAME,FACTSET_API_KEY=$FACTSET_API_KEY,NEWRELIC_API_KEY=$NEWRELIC_API_KEY,EIA_API_KEY=$EIA_API_KEY"
+          }
+
+          deploy_scheduler() {
+            local NAME=$1
+            local CRON=$2
+            local JOB=$3
+
+            echo "Deploying Cloud Scheduler: $NAME with schedule '$CRON'"
+
+            gcloud scheduler jobs update http "$NAME" \
+              --location="$REGION" \
+              --schedule="$CRON" \
+              --time-zone="UTC" \
+              --uri="https://$REGION-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/$PROJECT_ID/jobs/$JOB:run" \
+              --http-method=POST \
+              --oauth-service-account-email="$SERVICE_ACCOUNT_EMAIL" \
+              --oauth-token-scope="https://www.googleapis.com/auth/cloud-platform" || \
+            gcloud scheduler jobs create http "$NAME" \
+              --location="$REGION" \
+              --schedule="$CRON" \
+              --time-zone="UTC" \
+              --uri="https://$REGION-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/$PROJECT_ID/jobs/$JOB:run" \
+              --http-method=POST \
+              --oauth-service-account-email="$SERVICE_ACCOUNT_EMAIL" \
+              --oauth-token-scope="https://www.googleapis.com/auth/cloud-platform"
+          }
+
+          # Get number of pipelines
+          pipeline_count=$(yq '.pipelines | length' config/pipelines.yaml)
+
+          # Deploy each pipeline
+          for i in $(seq 0 $((pipeline_count - 1))); do
+            name=$(yq ".pipelines[$i].name" config/pipelines.yaml)
+            schedule=$(yq ".pipelines[$i].schedule" config/pipelines.yaml)
+
+            # Use pipeline-specific resources or fall back to defaults
+            cpu=$(yq ".pipelines[$i].cpu // \"$DEFAULT_CPU\"" config/pipelines.yaml)
+            memory=$(yq ".pipelines[$i].memory // \"$DEFAULT_MEMORY\"" config/pipelines.yaml)
+            max_retries=$(yq ".pipelines[$i].max_retries // $DEFAULT_MAX_RETRIES" config/pipelines.yaml)
+
+            job_name="${name}-job"
+            scheduler_name="${name}-schedule"
+
+            echo ""
+            echo "=========================================="
+            echo "Deploying pipeline: $name"
+            echo "=========================================="
+
+            deploy_job "$job_name" "$name" "$cpu" "$memory" "$max_retries"
+            deploy_scheduler "$scheduler_name" "$schedule" "$job_name"
+          done
+
+          echo ""
+          echo "=========================================="
+          echo "All pipelines deployed successfully!"
+          echo "=========================================="

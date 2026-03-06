@@ -1,0 +1,50 @@
+# Pipeline Deployment Configuration
+# Add new pipelines here - no need to modify the GitHub Actions workflow
+
+gcp:
+  project_id: wsb-hc-qasap-ae2e
+  region: us-central1
+  service_account: prod-job-runner@wsb-hc-qasap-ae2e.iam.gserviceaccount.com
+
+# Default resource settings (can be overridden per pipeline)
+defaults:
+  cpu: "2"
+  memory: 2Gi
+  max_retries: 3
+
+# Pipeline definitions
+# Each pipeline should have a corresponding folder at src/scheduler/{name}/
+# with a Dockerfile, {name}.py, and requirements.txt
+pipelines:
+  - name: factset-snapshot
+    schedule: "30 20 * * *"  # 8:30 PM UTC daily
+
+  - name: factset-eod
+    schedule: "0 23 * * *"   # 11:00 PM UTC daily
+
+  - name: factset-raw-data-update
+    schedule: "35 20 * * *"  # 8:35 PM UTC daily
+
+  - name: raw-supplemental-data-update
+    schedule: "35 20 * * *"  # 8:35 PM UTC daily
+
+  - name: factset-global-indices
+    schedule: "0 22 * * *"   # 11:00 PM UTC daily
+
+  - name: factset-bofa-bond-indices
+    schedule: "30 22 * * *"  # 11:00 PM UTC daily
+
+  - name: eia-petroleum
+    schedule: "0 18 * * 3"   # Wednesdays at 6 PM UTC (EIA releases ~10:30 AM ET)
+
+# To add a new pipeline:
+# 1. Create src/scheduler/{pipeline-name}/ with Dockerfile, {pipeline-name}.py, requirements.txt
+# 2. Add an entry here with name and schedule
+# 3. Optionally override cpu, memory, or max_retries if different from defaults
+#
+# Example with custom resources:
+#   - name: my-heavy-pipeline
+#     schedule: "0 12 * * *"
+#     cpu: "4"
+#     memory: 8Gi
+#     max_retries: 5

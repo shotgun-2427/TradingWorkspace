@@ -1,0 +1,8 @@
+services:
+  ib-gateway:
+    image: ghcr.io/gnzsnz/ib-gateway:stable
+    restart: always
+    env_file: .env
+    ports:
+      - "4003:4003"   # live
+      - "4004:4004"   # paper

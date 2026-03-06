@@ -1,0 +1,13 @@
+pandas==2.2.3
+pydantic
+PyYAML
+fds.sdk.formula
+fds.sdk.utils
+db-dtypes
+google-cloud-bigquery
+pymsteams
+pandas_gbq
+pandas_market_calendars
+opentelemetry-api
+opentelemetry-sdk
+opentelemetry-exporter-otlp

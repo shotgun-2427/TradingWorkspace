@@ -1,0 +1,109 @@
+{
+  "fields": [
+    {
+      "field_id": 1,
+      "field_name": "open_1d",
+      "field_type": "double"
+    },
+    {
+      "field_id": 2,
+      "field_name": "high_1d",
+      "field_type": "double"
+    },
+    {
+      "field_id": 3,
+      "field_name": "low_1d",
+      "field_type": "double"
+    },
+    {
+      "field_id": 4,
+      "field_name": "close_1d",
+      "field_type": "double"
+    },
+    {
+      "field_id": 5,
+      "field_name": "volume_1d",
+      "field_type": "int"
+    },
+    {
+      "field_id": 6,
+      "field_name": "open_interest_1d",
+      "field_type": "int"
+    },
+    {
+      "field_id": 7,
+      "field_name": "adjusted_close_1d",
+      "field_type": "double"
+    },
+    {
+      "field_id": 14,
+      "field_name": "adjusted_open_1d",
+      "field_type": "double"
+    },
+    {
+      "field_id": 15,
+      "field_name": "adjusted_high_1d",
+      "field_type": "double"
+    },
+    {
+      "field_id": 16,
+      "field_name": "adjusted_low_1d",
+      "field_type": "double"
+    },
+    {
+      "field_id": 17,
+      "field_name": "adjusted_open_snapshot",
+      "field_type": "double"
+    },
+    {
+      "field_id": 18,
+      "field_name": "adjusted_high_snapshot",
+      "field_type": "double"
+    },
+    {
+      "field_id": 19,
+      "field_name": "adjusted_low_snapshot",
+      "field_type": "double"
+    },
+    {
+      "field_id": 20,
+      "field_name": "adjusted_close_snapshot",
+      "field_type": "double"
+    },
+    {
+      "field_id": 21,
+      "field_name": "volume_snapshot",
+      "field_type": "int"
+    },
+    {
+      "field_id": 22,
+      "field_name": "total_return_1d",
+      "field_type": "double"
+    },
+    {
+      "field_id": 23,
+      "field_name": "oas_1d",
+      "field_type": "double"
+    },
+    {
+      "field_id": 24,
+      "field_name": "duration_modified_1d",
+      "field_type": "double"
+    },
+    {
+      "field_id": 25,
+      "field_name": "duration_effective_1d",
+      "field_type": "double"
+    },
+    {
+      "field_id": 26,
+      "field_name": "convexity_1d",
+      "field_type": "double"
+    },
+    {
+      "field_id": 27,
+      "field_name": "price_1d",
+      "field_type": "double"
+    }
+  ]
+} 
