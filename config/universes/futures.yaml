@@ -1,0 +1,29 @@
+futures:
+  enabled: false
+
+  hedge_candidates:
+    - ES
+    - NQ
+    - RTY
+    - YM
+    - ZN
+    - ZB
+    - CL
+    - GC
+    - SI
+    - VX
+
+  overlays:
+    equity_beta_hedge:
+      underlyings:
+        - ES
+        - NQ
+    duration_hedge:
+      underlyings:
+        - ZN
+        - ZB
+    commodity_overlay:
+      underlyings:
+        - CL
+        - GC
+        - SI

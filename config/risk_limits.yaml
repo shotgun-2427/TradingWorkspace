@@ -1,0 +1,24 @@
+risk_limits:
+  portfolio:
+    max_gross_exposure: 1.00
+    min_cash_buffer: 0.005
+    max_turnover_per_rebalance: 0.50
+    max_names: 25
+
+  position:
+    max_single_name_weight: 0.20
+    max_single_trade_notional: 150000.0
+    max_single_trade_shares: 5000
+    min_trade_dollars: 1000.0
+
+  execution:
+    reject_zero_price: true
+    reject_negative_price: true
+    reject_stale_data: true
+    reject_if_market_closed_for_moc: false
+    reject_if_open_orders_exist: false
+
+  derivatives:
+    enabled: false
+    max_futures_gross_notional: 0.25
+    max_options_premium_at_risk: 0.02

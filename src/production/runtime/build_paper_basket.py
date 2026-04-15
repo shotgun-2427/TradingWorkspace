@@ -1,0 +1,342 @@
+from __future__ import annotations
+
+import argparse
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+from typing import Iterable
+
+import numpy as np
+import pandas as pd
+
+from src.broker.ibkr.client import IBKRClient, IBKRConnectionConfig
+
+
+@dataclass(slots=True)
+class BasketBuildConfig:
+    targets_path: Path
+    reconciliation_csv_path: Path
+    reconciliation_parquet_path: Path
+    blotter_csv_path: Path
+    blotter_parquet_path: Path
+    orders_csv_path: Path
+    orders_parquet_path: Path
+    account_snapshot_dir: Path
+    positions_snapshot_dir: Path
+    host: str = "127.0.0.1"
+    port: int = 4004
+    client_id: int = 21
+    account: str | None = None
+    cash_buffer: float = 0.005
+    min_trade_dollars: float = 1000.0
+    symbol_whitelist: tuple[str, ...] = ()
+
+
+def _project_root() -> Path:
+    # trading-engine/src/production/runtime/build_paper_basket.py -> trading-engine/
+    return Path(__file__).resolve().parents[3]
+
+
+def default_config() -> BasketBuildConfig:
+    root = _project_root()
+    return BasketBuildConfig(
+        targets_path=root / "data/market/cleaned/targets/etf_targets_monthly.parquet",
+        reconciliation_csv_path=root / "data/broker/reconciliations/paper_reconciliation.csv",
+        reconciliation_parquet_path=root / "data/broker/reconciliations/paper_reconciliation.parquet",
+        blotter_csv_path=root / "data/broker/orders/paper_order_blotter.csv",
+        blotter_parquet_path=root / "data/broker/orders/paper_order_blotter.parquet",
+        orders_csv_path=root / "data/broker/orders/paper_orders_only.csv",
+        orders_parquet_path=root / "data/broker/orders/paper_orders_only.parquet",
+        account_snapshot_dir=root / "data/broker/account",
+        positions_snapshot_dir=root / "data/broker/positions",
+        host="127.0.0.1",
+        port=4004,
+        client_id=21,
+        cash_buffer=0.005,
+        min_trade_dollars=1000.0,
+    )
+
+
+def load_latest_targets(targets_path: Path) -> pd.DataFrame:
+    if not targets_path.exists():
+        raise FileNotFoundError(f"Targets file not found: {targets_path}")
+
+    targets = pd.read_parquet(targets_path)
+    if "date" not in targets.columns:
+        raise ValueError("Targets parquet must contain a 'date' column")
+    if "symbol" not in targets.columns:
+        raise ValueError("Targets parquet must contain a 'symbol' column")
+    if "target_weight" not in targets.columns:
+        raise ValueError("Targets parquet must contain a 'target_weight' column")
+
+    targets = targets.copy()
+    targets["date"] = pd.to_datetime(targets["date"])
+    targets = targets.sort_values(["date", "symbol"]).reset_index(drop=True)
+
+    latest_date = targets["date"].max()
+    latest_targets = targets.loc[targets["date"] == latest_date].copy()
+
+    if latest_targets.empty:
+        raise ValueError("No latest target rows found in targets parquet")
+
+    return latest_targets
+
+
+def fetch_positions_df(client: IBKRClient) -> pd.DataFrame:
+    positions = client.positions()
+    if len(positions) == 0:
+        return pd.DataFrame(columns=["symbol", "current_shares", "avg_cost"])
+
+    positions_df = pd.DataFrame(
+        [
+            {
+                "symbol": getattr(getattr(p, "contract", None), "symbol", None),
+                "current_shares": float(getattr(p, "position", 0.0)),
+                "avg_cost": float(getattr(p, "avgCost", 0.0)),
+            }
+            for p in positions
+        ]
+    )
+    positions_df = (
+        positions_df.groupby("symbol", as_index=False)
+        .agg(current_shares=("current_shares", "sum"), avg_cost=("avg_cost", "mean"))
+        .sort_values("symbol")
+        .reset_index(drop=True)
+    )
+    return positions_df
+
+
+def fetch_account_snapshot_df(client: IBKRClient) -> pd.DataFrame:
+    summary = client.account_summary()
+    rows = [{"tag": k, "value": v} for k, v in summary.items()]
+    return pd.DataFrame(rows).sort_values("tag").reset_index(drop=True)
+
+
+def build_reconciliation(
+    latest_targets: pd.DataFrame,
+    positions_df: pd.DataFrame,
+    portfolio_value: float,
+    *,
+    cash_buffer: float = 0.0,
+    min_trade_dollars: float = 1000.0,
+    symbol_whitelist: Iterable[str] = (),
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    latest_targets = latest_targets.copy()
+    positions_df = positions_df.copy()
+
+    if symbol_whitelist:
+        keep = {sym.strip().upper() for sym in symbol_whitelist}
+        latest_targets["symbol"] = latest_targets["symbol"].astype(str).str.upper()
+        latest_targets = latest_targets.loc[latest_targets["symbol"].isin(keep)].copy()
+
+    if latest_targets.empty:
+        raise ValueError("No target rows remain after whitelist filtering")
+
+    if "close" not in latest_targets.columns:
+        raise ValueError("Targets parquet must contain a 'close' column for basket building")
+
+    investable_value = portfolio_value * (1.0 - max(0.0, min(1.0, float(cash_buffer))))
+
+    recon = latest_targets.merge(
+        positions_df[["symbol", "current_shares"]]
+        if len(positions_df) > 0
+        else pd.DataFrame(columns=["symbol", "current_shares"]),
+        on="symbol",
+        how="left",
+    )
+
+    recon["current_shares"] = recon["current_shares"].fillna(0).astype(int)
+    recon["target_dollars"] = investable_value * recon["target_weight"].astype(float)
+    recon["target_shares"] = np.floor(
+        recon["target_dollars"] / recon["close"].astype(float)
+    ).astype(int)
+    recon["delta_shares"] = recon["target_shares"] - recon["current_shares"]
+    recon["side"] = np.where(
+        recon["delta_shares"] > 0,
+        "BUY",
+        np.where(recon["delta_shares"] < 0, "SELL", "HOLD"),
+    )
+    recon["abs_delta_shares"] = recon["delta_shares"].abs().astype(int)
+    recon["estimated_trade_dollars"] = (
+        recon["abs_delta_shares"] * recon["close"].astype(float)
+    )
+    recon["estimated_commission"] = recon["abs_delta_shares"].apply(
+        lambda qty: max(1.0, 0.01 * float(qty)) if qty > 0 else 0.0
+    )
+    recon["trade_date"] = pd.Timestamp.utcnow().tz_localize(None)
+
+    columns = [
+        col
+        for col in [
+            "date",
+            "trade_date",
+            "symbol",
+            "bucket",
+            "close",
+            "target_weight",
+            "target_dollars",
+            "target_shares",
+            "current_shares",
+            "delta_shares",
+            "side",
+            "estimated_trade_dollars",
+            "estimated_commission",
+            "abs_delta_shares",
+        ]
+        if col in recon.columns
+    ]
+    recon = recon[columns].sort_values(
+        ["side", "estimated_trade_dollars"], ascending=[True, False]
+    ).reset_index(drop=True)
+
+    orders_only = recon.loc[
+        (recon["side"] != "HOLD")
+        & (recon["abs_delta_shares"] > 0)
+        & (recon["estimated_trade_dollars"] >= float(min_trade_dollars))
+    ].copy().reset_index(drop=True)
+
+    return recon, orders_only
+
+
+def save_outputs(
+    recon: pd.DataFrame,
+    orders_only: pd.DataFrame,
+    positions_df: pd.DataFrame,
+    account_snapshot_df: pd.DataFrame,
+    config: BasketBuildConfig,
+) -> dict[str, Path]:
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    for path in [
+        config.reconciliation_csv_path,
+        config.reconciliation_parquet_path,
+        config.blotter_csv_path,
+        config.blotter_parquet_path,
+        config.orders_csv_path,
+        config.orders_parquet_path,
+    ]:
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+    config.account_snapshot_dir.mkdir(parents=True, exist_ok=True)
+    config.positions_snapshot_dir.mkdir(parents=True, exist_ok=True)
+
+    recon.to_csv(config.reconciliation_csv_path, index=False)
+    recon.to_parquet(config.reconciliation_parquet_path, index=False)
+
+    recon.to_csv(config.blotter_csv_path, index=False)
+    recon.to_parquet(config.blotter_parquet_path, index=False)
+
+    orders_only.to_csv(config.orders_csv_path, index=False)
+    orders_only.to_parquet(config.orders_parquet_path, index=False)
+
+    account_snapshot_path = config.account_snapshot_dir / f"paper_account_summary_{timestamp}.csv"
+    positions_snapshot_path = config.positions_snapshot_dir / "paper_positions_snapshot.csv"
+
+    account_snapshot_df.to_csv(account_snapshot_path, index=False)
+    positions_df.to_csv(positions_snapshot_path, index=False)
+
+    return {
+        "reconciliation_csv": config.reconciliation_csv_path,
+        "reconciliation_parquet": config.reconciliation_parquet_path,
+        "blotter_csv": config.blotter_csv_path,
+        "blotter_parquet": config.blotter_parquet_path,
+        "orders_csv": config.orders_csv_path,
+        "orders_parquet": config.orders_parquet_path,
+        "account_snapshot_csv": account_snapshot_path,
+        "positions_snapshot_csv": positions_snapshot_path,
+    }
+
+
+def build_paper_basket(config: BasketBuildConfig) -> dict[str, object]:
+    latest_targets = load_latest_targets(config.targets_path)
+
+    client = IBKRClient(
+        IBKRConnectionConfig(
+            host=config.host,
+            port=config.port,
+            client_id=config.client_id,
+            account=config.account,
+        )
+    )
+    client.connect()
+    try:
+        positions_df = fetch_positions_df(client)
+        account_snapshot_df = fetch_account_snapshot_df(client)
+        portfolio_value = client.net_liquidation()
+    finally:
+        client.disconnect()
+
+    recon, orders_only = build_reconciliation(
+        latest_targets,
+        positions_df,
+        portfolio_value,
+        cash_buffer=config.cash_buffer,
+        min_trade_dollars=config.min_trade_dollars,
+        symbol_whitelist=config.symbol_whitelist,
+    )
+    saved_paths = save_outputs(
+        recon=recon,
+        orders_only=orders_only,
+        positions_df=positions_df,
+        account_snapshot_df=account_snapshot_df,
+        config=config,
+    )
+
+    return {
+        "latest_target_date": pd.to_datetime(latest_targets["date"]).max(),
+        "portfolio_value": float(portfolio_value),
+        "reconciliation_rows": int(len(recon)),
+        "orders_rows": int(len(orders_only)),
+        "buy_dollars": float(
+            orders_only.loc[
+                orders_only["side"] == "BUY", "estimated_trade_dollars"
+            ].sum()
+        ),
+        "sell_dollars": float(
+            orders_only.loc[
+                orders_only["side"] == "SELL", "estimated_trade_dollars"
+            ].sum()
+        ),
+        "saved_paths": saved_paths,
+    }
+
+
+def parse_args() -> argparse.Namespace:
+    default = default_config()
+    parser = argparse.ArgumentParser(description="Build IBKR paper rebalance basket")
+    parser.add_argument("--targets-path", type=Path, default=default.targets_path)
+    parser.add_argument("--host", default=default.host)
+    parser.add_argument("--port", type=int, default=default.port)
+    parser.add_argument("--client-id", type=int, default=default.client_id)
+    parser.add_argument("--account", default=default.account)
+    parser.add_argument("--cash-buffer", type=float, default=default.cash_buffer)
+    parser.add_argument("--min-trade-dollars", type=float, default=default.min_trade_dollars)
+    parser.add_argument("--symbol", action="append", dest="symbols", default=[])
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+    config = default_config()
+    config.targets_path = args.targets_path
+    config.host = args.host
+    config.port = args.port
+    config.client_id = args.client_id
+    config.account = args.account
+    config.cash_buffer = args.cash_buffer
+    config.min_trade_dollars = args.min_trade_dollars
+    config.symbol_whitelist = tuple(args.symbols or [])
+
+    result = build_paper_basket(config)
+    print("Built paper basket")
+    print(f"Latest target date: {result['latest_target_date']}")
+    print(f"Portfolio value: {result['portfolio_value']:.2f}")
+    print(f"Orders rows: {result['orders_rows']}")
+    print(f"Buy dollars: {result['buy_dollars']:.2f}")
+    print(f"Sell dollars: {result['sell_dollars']:.2f}")
+    for name, path in result["saved_paths"].items():
+        print(f"{name}: {path}")
+
+
+if __name__ == "__main__":
+    main()

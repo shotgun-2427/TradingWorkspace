@@ -1,0 +1,21 @@
+execution:
+  mode: paper
+  allow_submit: false
+  dry_run: true
+
+  basket:
+    min_trade_dollars: 1000.0
+    round_shares_down: true
+    cash_buffer: 0.005
+
+  order_defaults:
+    order_type: MOC
+    tif: DAY
+    outside_rth: false
+
+  safety:
+    cancel_open_orders_before_submit: false
+    reject_duplicate_symbols: true
+    reject_unknown_symbols: true
+    require_fresh_account_snapshot: true
+    require_fresh_positions_snapshot: true

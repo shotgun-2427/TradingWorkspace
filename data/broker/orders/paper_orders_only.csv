@@ -1,0 +1,3 @@
+date,trade_date,symbol,bucket,close,target_weight,target_dollars,target_shares,current_shares,delta_shares,side,estimated_trade_dollars,estimated_commission,abs_delta_shares
+2026-03-06,2026-03-13 02:29:49.056624,QQQ,core_us,599.75,0.3,297256.61019,495,500,-5,SELL,2998.75,1.0,5
+2026-03-06,2026-03-13 02:29:49.056624,SPY,core_us,672.38,0.3,297256.61019,442,446,-4,SELL,2689.52,1.0,4

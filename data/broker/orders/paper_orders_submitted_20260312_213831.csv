@@ -1,0 +1,3 @@
+timestamp,symbol,action,order_type,quantity,delta_shares,estimated_trade_dollars,status,order_id,perm_id
+2026-03-12T21:38:32,QQQ,SELL,MKT,5,-5,2998.75,Filled,4,531855528
+2026-03-12T21:38:33,SPY,SELL,MKT,4,-4,2689.52,Filled,6,531855529

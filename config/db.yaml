@@ -1,0 +1,18 @@
+database:
+  enabled: false
+  driver: postgresql
+  host: 127.0.0.1
+  port: 5432
+  name: trading
+  user: postgres
+  password: postgres
+  schema: public
+
+tables:
+  market_data: market_data
+  signals: signals
+  targets: targets
+  positions: positions
+  orders: orders
+  fills: fills
+  run_logs: run_logs

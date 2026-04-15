@@ -1,408 +1,274 @@
-"""
-Data loading utilities for the dashboard.
-"""
-from datetime import datetime
-import json
-from google.cloud import storage
-import streamlit as st
+from __future__ import annotations
+
+import re
+from pathlib import Path
+from typing import Any
+
+import numpy as np
 import pandas as pd
-import pandas_market_calendars as mcal
-from io import BytesIO
-import yfinance as yf
+import streamlit as st
+
+from src.dashboard.services.broker_service import get_account_summary
 
 
-# Constants
-BUCKET_NAME = "wsb-hc-qasap-bucket-1"
-SIMULATIONS_AUDIT_PREFIX = "hcf/paper/simulations_audit"
-PRODUCTION_AUDIT_PREFIX = "hcf/paper/production_audit"
-NYSE = mcal.get_calendar('NYSE').schedule(start_date='1900/01/01', end_date=datetime.today().strftime('%Y-%m-%d'))
-
-@st.cache_resource
-def get_gcs_bucket() -> storage.Bucket:
-    """Return a cached Google Cloud Storage `Bucket` for reuse across the app.
-
-    This returns the configured `BUCKET_NAME` as a cached resource so other
-    functions can reuse the same bucket object instead of recreating clients
-    or buckets on every call.
-    """
-    client = storage.Client()
-    return client.bucket(BUCKET_NAME)
-
-@st.cache_data(ttl=3600)
-def get_latest_simulations_audit() -> datetime.date:
-    """
-    Get the most recent audit date from the production simulations directory in GCS.
-    
-    Returns:
-        datetime.date: The most recent audit date found in the simulations_audit directory.
-    """
-    latest_date = datetime.today().date()
-    while True:
-        prefix = latest_date.strftime('%Y-%m-%d')
-        csv_blob_path = f"{SIMULATIONS_AUDIT_PREFIX}/{prefix}/config.json"
-
-        bucket = get_gcs_bucket()
-        blob = bucket.blob(csv_blob_path)
-
-        if blob.exists():
-            return latest_date
-
-        latest_date -= pd.Timedelta(days=1)
+def _project_root() -> Path:
+    return Path(__file__).resolve().parents[3]
 
 
-@st.cache_data(ttl=3600)
-def get_latest_production_audit() -> datetime.date:
-    """
-    Get the most recent audit date from the production directory in GCS.
-    
-    Returns:
-        datetime.date: The most recent audit date found in the production_audit directory.
-    """
-    latest_date = datetime.today().date()
-    while True:
-        prefix = latest_date.strftime('%Y-%m-%d')
-        csv_blob_path = f"{PRODUCTION_AUDIT_PREFIX}/{prefix}/config.json"
-
-        bucket = get_gcs_bucket()
-        blob = bucket.blob(csv_blob_path)
-
-        if blob.exists():
-            return latest_date
-
-        latest_date -= pd.Timedelta(days=1)
+def _latest_file(folder: Path, pattern: str) -> Path | None:
+    files = sorted(folder.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)
+    return files[0] if files else None
 
 
-@st.cache_data
-def _get_production_audit_config_on_day(date: datetime.date) -> dict:
-    """
-    Read `config.json` from a specific production audit folder and return its contents as a dictionary.
-
-    Args:
-        date: The date of the production audit to read.
-    """
-    config_blob_path = f"{PRODUCTION_AUDIT_PREFIX}/{date.strftime('%Y-%m-%d')}/config.json"
-
-    bucket = get_gcs_bucket()
-    blob = bucket.blob(config_blob_path)
-
-    content = blob.download_as_text()
-    data = json.loads(content)
-
-    return data
+def _extract_timestamp(path: Path) -> pd.Timestamp | None:
+    m = re.search(r"(\d{8})_(\d{6})", path.name)
+    if m:
+        return pd.to_datetime(f"{m.group(1)} {m.group(2)}", format="%Y%m%d %H%M%S", errors="coerce")
+    m = re.search(r"(\d{8})", path.name)
+    if m:
+        return pd.to_datetime(m.group(1), format="%Y%m%d", errors="coerce")
+    try:
+        return pd.Timestamp.fromtimestamp(path.stat().st_mtime)
+    except Exception:
+        return None
 
 
-def get_production_audit_config() -> dict:
-    """
-    Read `config.json` from the latest production audit folder and return its contents as a dictionary.
-
-    Returns:
-        dict: The contents of `config.json` as a dictionary.
-    """
-    return _get_production_audit_config_on_day(get_latest_production_audit())
+def _normalize_name(name: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(name).lower())
 
 
-def get_production_audit_models() -> list:
-    """
-    Read `config.json` from the latest production audit folder and return the
-    value of its "models" field.
-
-    Returns:
-        list: The list from the `models` field in `config.json` (or an empty
-        list if the field is missing).
-    """
-    return get_production_audit_config().get("models", [])
+def _first_existing_col(df: pd.DataFrame, candidates: list[str]) -> str | None:
+    normalized = {_normalize_name(c): c for c in df.columns}
+    for candidate in candidates:
+        actual = normalized.get(_normalize_name(candidate))
+        if actual:
+            return actual
+    return None
 
 
-def get_production_audit_optimizers() -> list:
-    """
-    Read `config.json` from the latest production audit folder and return the
-    value of its "optimizers" field.
-
-    Returns:
-        list: The list from the `optimizers` field in `config.json` (or an empty
-        list if the field is missing).
-    """
-    return get_production_audit_config().get("optimizers", [])
+def _to_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(str(value).replace(",", "").replace("$", "").strip())
+    except Exception:
+        return None
 
 
-def align(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Align the given DataFrame's 'date' column to only include NYSE trading days.
-
-    Args:
-        df: The DataFrame with a 'date' column to align.
-
-    Returns:
-        pd.DataFrame: The aligned DataFrame.
-    """
-    df = df.copy()
-    df["date"] = pd.to_datetime(df["date"]).dt.normalize()
-    # Only filter in dates that intersect with NYSE trading days
-    df = df[df["date"].isin(NYSE.index)]
-    return df
-
-
-@st.cache_data
-def _get_model_backtest_on_day(model_name: str, date: datetime.date) -> pd.DataFrame:
-    """
-    Load a model's backtest results CSV from a specific production audit into a
-    pandas DataFrame.
-
-    The CSV path format is:
-        hcf/paper/production_audit/YYYY-MM-DD/model_backtests_{model_name}_backtest_results.csv
-    """
-    csv_blob_path = (
-        f"{PRODUCTION_AUDIT_PREFIX}/{date.strftime('%Y-%m-%d')}/"
-        f"model_backtests_{model_name}_backtest_results.csv"
+def _to_num(series: pd.Series) -> pd.Series:
+    return pd.to_numeric(
+        series.astype(str).str.replace(",", "", regex=False).str.replace("$", "", regex=False),
+        errors="coerce",
     )
 
-    bucket = get_gcs_bucket()
-    blob = bucket.blob(csv_blob_path)
 
-    data_bytes = blob.download_as_bytes()
-    df = pd.read_csv(BytesIO(data_bytes))
+def _extract_tag_value(df: pd.DataFrame, tags: list[str]) -> float | None:
+    tag_col = _first_existing_col(df, ["tag", "key", "field", "name"])
+    value_col = _first_existing_col(df, ["value", "amount", "val"])
+    if tag_col is None or value_col is None:
+        return None
 
-    return df
+    temp = df.copy()
+    temp[tag_col] = temp[tag_col].astype(str)
 
-def get_model_backtest(model_name: str) -> pd.DataFrame:
-    """
-    Load a model's backtest results CSV from the latest production audit into a
-    pandas DataFrame.
-
-    The CSV path format is:
-        hcf/paper/production_audit/YYYY-MM-DD/model_backtests_{model_name}_backtest_results.csv
-
-    Args:
-        model_name: Name of the model to load (used in the filename).
-
-    Returns:
-        pd.DataFrame: The backtest results as a pandas DataFrame.
-    """
-    return align(_get_model_backtest_on_day(model_name, get_latest_production_audit()))
+    for tag in tags:
+        hit = temp.loc[temp[tag_col].str.lower() == tag.lower()]
+        if not hit.empty:
+            val = _to_float(hit.iloc[0][value_col])
+            if val is not None:
+                return val
+    return None
 
 
+@st.cache_data(show_spinner=False)
+def build_equity_curve() -> pd.DataFrame:
+    account_dir = _project_root() / "data" / "broker" / "account"
+    rows: list[dict[str, Any]] = []
 
-@st.cache_data
-def _get_reduced_portfolio_backtest_on_day(model_name: str, date: datetime.date) -> pd.DataFrame:
-    """
-    Load a reduced portfolio backtest CSV for the given model from a specific
-    production audit into a pandas DataFrame.
+    for path in sorted(account_dir.glob("paper_account_summary_*.csv")):
+        try:
+            df = pd.read_csv(path)
+            nav = _extract_tag_value(
+                df,
+                ["NetLiquidation", "EquityWithLoanValue", "Net Liquidation", "Equity With Loan Value"],
+            )
+            ts = _extract_timestamp(path)
+            if nav is not None and ts is not None:
+                rows.append({"timestamp": ts, "nav": float(nav)})
+        except Exception:
+            continue
 
-    The CSV path format is:
-        hcf/paper/simulations_audit/YYYY-MM-DD/reduced_portfolio_backtests_{model_name}_backtest_results.csv
-    """
-    opt = get_active_optimizer()
-    csv_blob_path = (
-        f"{SIMULATIONS_AUDIT_PREFIX}/{date.strftime('%Y-%m-%d')}/"
-        f"reduced_portfolio_backtests_{model_name}_{opt}_backtest_results.csv"
+    if not rows:
+        return pd.DataFrame(columns=["timestamp", "nav"])
+
+    out = pd.DataFrame(rows).sort_values("timestamp").drop_duplicates("timestamp", keep="last").reset_index(drop=True)
+    return out
+
+
+@st.cache_data(show_spinner=False)
+def load_positions_snapshot() -> pd.DataFrame:
+    path = _project_root() / "data" / "broker" / "positions" / "paper_positions_snapshot.csv"
+    if not path.exists():
+        return pd.DataFrame()
+
+    df = pd.read_csv(path)
+    if df.empty:
+        return pd.DataFrame()
+
+    symbol_col = _first_existing_col(df, ["symbol", "ticker"])
+    shares_col = _first_existing_col(df, ["current_shares", "shares", "position", "qty", "quantity"])
+    avg_col = _first_existing_col(df, ["avg_cost", "average_cost", "avg_px", "avgprice"])
+
+    if symbol_col is None or shares_col is None or avg_col is None:
+        return pd.DataFrame()
+
+    out = pd.DataFrame()
+    out["symbol"] = df[symbol_col].astype(str).str.upper()
+    out["shares"] = _to_num(df[shares_col]).fillna(0.0)
+    out["avg_cost"] = _to_num(df[avg_col]).fillna(0.0)
+    out = out.loc[out["shares"] != 0].copy()
+    out = out.sort_values("symbol").reset_index(drop=True)
+    return out
+
+
+@st.cache_data(show_spinner=False)
+def load_latest_prices() -> pd.DataFrame:
+    prices_dir = _project_root() / "data" / "market" / "cleaned" / "prices"
+    parquet_path = prices_dir / "etf_prices_master.parquet"
+    csv_path = prices_dir / "etf_prices_master.csv"
+
+    if parquet_path.exists():
+        df = pd.read_parquet(parquet_path)
+    elif csv_path.exists():
+        df = pd.read_csv(csv_path)
+    else:
+        return pd.DataFrame()
+
+    df.columns = [str(c).lower().strip() for c in df.columns]
+    symbol_col = _first_existing_col(df, ["symbol", "ticker"])
+    date_col = _first_existing_col(df, ["date", "datetime", "timestamp"])
+    close_col = _first_existing_col(df, ["close", "adj_close", "adjclose", "adjusted_close"])
+
+    if symbol_col is None or date_col is None or close_col is None:
+        return pd.DataFrame()
+
+    out = df[[symbol_col, date_col, close_col]].copy()
+    out.columns = ["symbol", "date", "close"]
+    out["symbol"] = out["symbol"].astype(str).str.upper()
+    out["date"] = pd.to_datetime(out["date"], errors="coerce")
+    out["close"] = _to_num(out["close"])
+    out = out.dropna(subset=["date", "close"])
+    out = out.sort_values(["symbol", "date"]).reset_index(drop=True)
+    return out
+
+
+@st.cache_data(show_spinner=False)
+def build_holdings_table() -> pd.DataFrame:
+    positions = load_positions_snapshot()
+    prices = load_latest_prices()
+
+    if positions.empty or prices.empty:
+        return pd.DataFrame()
+
+    latest = (
+        prices.groupby("symbol", as_index=False)
+        .tail(1)[["symbol", "close"]]
+        .rename(columns={"close": "last"})
+        .sort_values("symbol")
+        .reset_index(drop=True)
     )
 
-    bucket = get_gcs_bucket()
-    blob = bucket.blob(csv_blob_path)
+    merged = positions.merge(latest, on="symbol", how="left")
+    merged["last"] = merged["last"].fillna(0.0)
+    merged["market_value"] = merged["shares"] * merged["last"]
+    merged["pnl"] = merged["shares"] * (merged["last"] - merged["avg_cost"])
 
-    data_bytes = blob.download_as_bytes()
-    df = pd.read_csv(BytesIO(data_bytes))
+    total_mv = float(merged["market_value"].sum())
+    merged["weight"] = np.where(total_mv > 0, merged["market_value"] / total_mv, 0.0)
 
-    return df
-
-def get_reduced_portfolio_backtest(model_name: str) -> pd.DataFrame:
-    """
-    Load a reduced portfolio backtest CSV for the given model from the latest
-    simulations audit into a pandas DataFrame.
-
-    The CSV path format is:
-        hcf/paper/simulations_audit/YYYY-MM-DD/reduced_portfolio_backtests_{model_name}_backtest_results.csv
-    """
-    return _get_reduced_portfolio_backtest_on_day(model_name, get_latest_simulations_audit())
-
-@st.cache_data
-def _get_portfolio_backtest_on_day(optimizer_name: str, date: datetime.date) -> pd.DataFrame:
-    """
-    Load a portfolio backtest CSV for the given optimizer from a specific
-    production audit into a pandas DataFrame.
-
-    The CSV path format is:
-        hcf/paper/production_audit/YYYY-MM-DD/portfolio_backtests_{optimizer_name}_backtest_results.csv
-    """
-    csv_blob_path = (
-        f"{PRODUCTION_AUDIT_PREFIX}/{date.strftime('%Y-%m-%d')}/"
-        f"portfolio_backtests_{optimizer_name}_backtest_results.csv"
-    )
-
-    bucket = get_gcs_bucket()
-    blob = bucket.blob(csv_blob_path)
-
-    data_bytes = blob.download_as_bytes()
-    df = pd.read_csv(BytesIO(data_bytes))
-
-    return df
+    merged = merged.sort_values("market_value", ascending=False).reset_index(drop=True)
+    return merged
 
 
-def get_portfolio_backtest(optimizer_name: str) -> pd.DataFrame:
-    """
-    Load a portfolio backtest CSV for the given optimizer from the latest
-    production audit into a pandas DataFrame.
+def compute_curve_metrics(curve: pd.DataFrame) -> dict[str, float | None]:
+    if curve.empty or len(curve) < 2:
+        latest_nav = float(curve["nav"].iloc[-1]) if not curve.empty else None
+        return {
+            "latest_nav": latest_nav,
+            "daily_pnl": None,
+            "total_return": None,
+            "annualized_return": None,
+            "sharpe": None,
+            "max_drawdown": None,
+        }
 
-    The CSV path format is:
-        hcf/paper/production_audit/YYYY-MM-DD/portfolio_backtests_{optimizer_name}_backtest_results.csv
+    work = curve.copy().sort_values("timestamp").reset_index(drop=True)
+    work["ret"] = work["nav"].pct_change()
+    work["cummax"] = work["nav"].cummax()
+    work["drawdown"] = work["nav"] / work["cummax"] - 1.0
 
-    Args:
-        optimizer_name: Name of the optimizer to load (used in the filename).
+    latest_nav = float(work["nav"].iloc[-1])
+    prior_nav = float(work["nav"].iloc[-2])
+    daily_pnl = latest_nav - prior_nav
 
-    Returns:
-        pd.DataFrame: The backtest results as a pandas DataFrame.
-    """
-    return align(_get_portfolio_backtest_on_day(optimizer_name, get_latest_production_audit()))
+    total_return = latest_nav / float(work["nav"].iloc[0]) - 1.0
 
+    days = max((work["timestamp"].iloc[-1] - work["timestamp"].iloc[0]).days, 1)
+    annualized_return = (1.0 + total_return) ** (365.0 / days) - 1.0 if total_return > -1 else None
 
+    ret = work["ret"].dropna()
+    sharpe = float((ret.mean() / ret.std()) * np.sqrt(252)) if len(ret) >= 2 and float(ret.std()) > 0 else None
+    max_drawdown = float(work["drawdown"].min()) if not work["drawdown"].empty else None
 
-@st.cache_data
-def _get_model_backtest_metrics_on_day(model_name: str, date: datetime.date) -> pd.DataFrame:
-    """
-    Load an individual model's backtest metrics CSV from a specific production audit into a
-    pandas DataFrame.
-
-    The CSV path format is:
-        hcf/paper/production_audit/YYYY-MM-DD/model_backtests_{model_name}_backtest_metrics.csv
-    """
-    csv_blob_path = (
-        f"{PRODUCTION_AUDIT_PREFIX}/{date.strftime('%Y-%m-%d')}/"
-        f"model_backtests_{model_name}_backtest_metrics.csv"
-    )
-
-    bucket = get_gcs_bucket()
-    blob = bucket.blob(csv_blob_path)
-
-    data_bytes = blob.download_as_bytes()
-    df = pd.read_csv(BytesIO(data_bytes))
-
-    return df
-
-
-def get_model_backtest_metrics(model_name: str) -> pd.DataFrame:
-    """
-    Load an individual model's backtest metrics CSV from the latest production audit into a
-    pandas DataFrame.
-
-    The CSV path format is:
-        hcf/paper/production_audit/YYYY-MM-DD/model_backtests_{model_name}_backtest_metrics.csv
-
-    Args:
-        model_name: Name of the model to load (used in the filename).
-
-    Returns:
-        pd.DataFrame: The backtest metrics as a pandas DataFrame with columns 'metric' and 'value'.
-    """
-    return _get_model_backtest_metrics_on_day(model_name, get_latest_production_audit())
+    return {
+        "latest_nav": latest_nav,
+        "daily_pnl": daily_pnl,
+        "total_return": total_return,
+        "annualized_return": annualized_return,
+        "sharpe": sharpe,
+        "max_drawdown": max_drawdown,
+    }
 
 
-@st.cache_data
-def _get_portfolio_backtest_metrics_on_day(optimizer_name: str, date: datetime.date) -> pd.DataFrame:
-    """
-    Load portfolio backtest metrics CSV for the given optimizer from a specific
-    production audit day into a pandas DataFrame.
-
-    The CSV path format is:
-        hcf/paper/production_audit/YYYY-MM-DD/portfolio_backtests_{optimizer_name}_backtest_metrics.csv
-    """
-    csv_blob_path = (
-        f"{PRODUCTION_AUDIT_PREFIX}/{date.strftime('%Y-%m-%d')}/"
-        f"portfolio_backtests_{optimizer_name}_backtest_metrics.csv"
-    )
-
-    bucket = get_gcs_bucket()
-    blob = bucket.blob(csv_blob_path)
-
-    data_bytes = blob.download_as_bytes()
-    df = pd.read_csv(BytesIO(data_bytes))
-
-    return df
+def _load_live_net_liq(profile: str = "paper") -> float | None:
+    try:
+        rows = get_account_summary(profile=profile)
+        if not rows:
+            return None
+        df = pd.DataFrame(rows)
+        return _extract_tag_value(df, ["NetLiquidation", "EquityWithLoanValue"])
+    except Exception:
+        return None
 
 
-def get_portfolio_backtest_metrics(optimizer_name: str) -> pd.DataFrame:
-    """
-    Portfolio backtest metrics (CSV path format is):
-        hcf/paper/production_audit/YYYY-MM-DD/portfolio_backtests_{optimizer_name}_backtest_metrics.csv
+def load_home_dashboard_data(profile: str = "paper") -> dict[str, Any]:
+    curve = build_equity_curve()
+    holdings = build_holdings_table()
 
-    Args:
-        optimizer_name: Name of the optimizer to load (used in the filename).
+    live_nav = _load_live_net_liq(profile=profile)
+    now = pd.Timestamp.now().floor("s")
 
-    Returns:
-        pd.DataFrame: backtest metrics pandas DataFrame with cols: 'metric' and 'value'
-    """
-    return _get_portfolio_backtest_metrics_on_day(optimizer_name, get_latest_production_audit())
+    if live_nav is not None:
+        live_row = pd.DataFrame([{"timestamp": now, "nav": float(live_nav)}])
+        if curve.empty:
+            curve = live_row
+        else:
+            curve = pd.concat([curve, live_row], ignore_index=True)
+            curve = curve.sort_values("timestamp").drop_duplicates("timestamp", keep="last").reset_index(drop=True)
 
+    metrics = compute_curve_metrics(curve)
 
-@st.cache_data
-def _get_historical_nav_on_day(date: datetime.date) -> pd.DataFrame:
-    """
-    Load historical NAV data from a specific production audit into a pandas DataFrame.
+    warnings: list[str] = []
+    if curve.empty:
+        warnings.append("No paper account snapshots found.")
+    if holdings.empty:
+        warnings.append("No positions snapshot or latest prices found.")
+    if live_nav is None:
+        warnings.append("Live IBKR NetLiquidation could not be loaded.")
 
-    The CSV path format is:
-        hcf/paper/production_audit/YYYY-MM-DD/historical_nav.csv
-    """
-    csv_blob_path = (
-        f"{PRODUCTION_AUDIT_PREFIX}/{date.strftime('%Y-%m-%d')}/"
-        f"historical_nav.csv"
-    )
-
-    bucket = get_gcs_bucket()
-    blob = bucket.blob(csv_blob_path)
-
-    data_bytes = blob.download_as_bytes()
-    df = pd.read_csv(BytesIO(data_bytes))
-    return df
-
-
-def get_historical_nav() -> pd.DataFrame:
-    """
-    Load historical NAV data from the latest production audit into a pandas DataFrame.
-
-    The CSV path format is:
-        hcf/paper/production_audit/YYYY-MM-DD/historical_nav.csv
-    
-    Returns:
-        pd.DataFrame: Has two columns, date (YYYY-MM-DD) and nav (float).
-    """
-    return align(_get_historical_nav_on_day(get_latest_production_audit()))
-
-
-@st.cache_data
-def get_spx_prices_from_date(start_date: datetime.date) -> pd.DataFrame:
-    """
-    Load historical SPX prices from a specific start date to today.
-
-    Args:
-        start_date: The start date as a datetime.date object.
-    Returns:
-        pd.DataFrame: DataFrame with columns 'date' and 'close'.
-    """
-    # Initialize ticker object
-    spx = yf.Ticker("^GSPC")
-
-    # Fetch historical data
-    data = spx.history(start=start_date, end=datetime.today().date())
-
-    # Reset index to make the date a column
-    data = data.reset_index()
-
-    # Keep only the relevant columns
-    data = data[["Date", "Close"]].rename(columns={"Date": "date", "Close": "close"})
-
-    # Ensure proper dtypes
-    data["date"] = pd.to_datetime(data["date"])
-    data["date"] = data["date"].dt.tz_localize(None)
-    data["close"] = pd.to_numeric(data["close"], errors="coerce")
-    return data
-
-@st.cache_data
-def get_active_optimizer() -> str:
-    """
-    TODO: This needs to be changed to support multiple optimizers. This is
-    (unfortunately) the logic that the paper portfolio uses to get the optimizer name.
-    Get the active optimizer name from the latest production audit config.
-
-    Returns:
-        str: The active optimizer name.
-    """
-    return get_production_audit_optimizers().pop()
+    return {
+        "curve": curve,
+        "holdings": holdings,
+        "metrics": metrics,
+        "warnings": warnings,
+    }

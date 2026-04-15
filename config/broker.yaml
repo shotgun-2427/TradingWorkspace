@@ -1,0 +1,26 @@
+default_broker: ibkr
+
+ibkr:
+  host: 127.0.0.1
+
+  paper:
+    port: 4004
+    client_id: 21
+    readonly: false
+    account: ""
+
+  live:
+    port: 4003
+    client_id: 22
+    readonly: false
+    account: ""
+
+  market_data:
+    snapshot_timeout_seconds: 5
+    allow_delayed_data: true
+
+  orders:
+    default_order_type: MOC
+    default_tif: DAY
+    outside_rth: false
+    preview_before_submit: true
