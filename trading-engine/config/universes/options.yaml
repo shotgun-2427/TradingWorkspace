@@ -1,0 +1,21 @@
+options:
+  enabled: false
+
+  underlyings:
+    - SPY
+    - QQQ
+    - TLT
+    - GLD
+    - IBIT
+    - ETHA
+    - VIXY
+
+  overlays:
+    protective_put:
+      enabled: false
+    covered_call:
+      enabled: false
+    collar:
+      enabled: false
+    vol_regime_overlay:
+      enabled: false

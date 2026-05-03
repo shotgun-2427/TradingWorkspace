@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Capital Fund Dashboard</title>
+    <link rel="stylesheet" href="/static/style.css" />
+    <script defer type="module" src="/static/js/main.js"></script>
+  </head>
+  <body>
+    <div id="layout">
+      <aside id="sidebar">
+        <div class="brand">
+          <h1>Capital Fund</h1>
+          <p>Dashboard</p>
+        </div>
+
+        <section class="control">
+          <label for="profile-select">Mode</label>
+          <div id="profile-toggle" class="segmented">
+            <button data-value="paper" class="active" type="button">Paper</button>
+            <button data-value="live" type="button">Live</button>
+          </div>
+        </section>
+
+        <nav id="nav">
+          <a class="nav-item" href="#/portfolio" data-page="portfolio">Portfolio Analysis</a>
+          <a class="nav-item" href="#/model" data-page="model">Model Analysis</a>
+          <a class="nav-item" href="#/asset" data-page="asset">Asset Analysis</a>
+          <a class="nav-item" href="#/slippage" data-page="slippage">Slippage Analysis</a>
+          <a class="nav-item" href="#/audit" data-page="audit">System Audit</a>
+        </nav>
+
+        <section class="control">
+          <h3>ETF master file</h3>
+          <p id="master-meta" class="meta">Loading...</p>
+          <button id="refresh-etf" type="button">Refresh ETF data</button>
+          <button id="clear-cache" type="button" class="ghost">Clear cache</button>
+        </section>
+
+        <section class="control">
+          <h3>Strategy</h3>
+          <label for="optimizer-select">Optimizer</label>
+          <select id="optimizer-select"></select>
+          <p id="optimizer-help" class="meta"></p>
+        </section>
+
+        <section class="control">
+          <h3>Audit</h3>
+          <button id="run-audit" type="button">Run audit (force rebalance)</button>
+        </section>
+
+        <section class="control">
+          <h3>Auto-refresh</h3>
+          <select id="auto-refresh-select">
+            <option value="0" selected>Off</option>
+            <option value="60">1 min</option>
+            <option value="300">5 min</option>
+            <option value="900">15 min</option>
+            <option value="3600">1 hour</option>
+          </select>
+        </section>
+
+        <div id="toaster"></div>
+      </aside>
+
+      <main id="main">
+        <div id="page-portfolio" class="page" hidden></div>
+        <div id="page-model" class="page" hidden></div>
+        <div id="page-asset" class="page" hidden></div>
+        <div id="page-slippage" class="page" hidden></div>
+        <div id="page-audit" class="page" hidden></div>
+      </main>
+    </div>
+  </body>
+</html>

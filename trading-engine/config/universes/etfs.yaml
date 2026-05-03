@@ -1,0 +1,39 @@
+etfs:
+  core:
+    - BIL
+    - ETHA
+    - GLD
+    - IBIT
+    - IEI
+    - INDA
+    - QQQ
+    - SHY
+    - SLV
+    - SPY
+    - TLT
+    - TQQQ
+    - UNG
+    - USO
+    - VEA
+    - VFH
+    - VHT
+    - VIS
+    - VIXY
+    - VNQ
+    - VPU
+    - VWO
+
+  active_trading:
+    - TLT
+    - IEI
+    - SHY
+    - BIL
+    - SLV
+    - GLD
+    - USO
+    - UNG
+    - SPY
+    - INDA
+    - IBIT
+    - ETHA
+    - VIXY

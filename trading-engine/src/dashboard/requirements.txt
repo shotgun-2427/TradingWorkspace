@@ -1,0 +1,12 @@
+# Capital Fund Dashboard runtime dependencies (FastAPI rewrite).
+#
+# Only what the dashboard process itself needs. The trading engine has its
+# own deps in pyproject.toml (pandas, polars, pyarrow, ib_async, etc) and
+# the dashboard imports from there - those are NOT duplicated here.
+#
+# Streamlit / altair / pydeck / google-cloud-storage and the rest of the old
+# Streamlit dependency wall are gone.
+
+fastapi==0.115.0
+uvicorn[standard]==0.32.0
+pydantic==2.9.2

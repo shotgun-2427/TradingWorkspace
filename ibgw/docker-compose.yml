@@ -1,0 +1,7 @@
+services:
+  ib-gateway:
+    image: ghcr.io/gnzsnz/ib-gateway:stable
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "127.0.0.1:4002:4004"
