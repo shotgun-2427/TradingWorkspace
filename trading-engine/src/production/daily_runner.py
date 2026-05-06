@@ -27,7 +27,7 @@ import os
 import sys
 from datetime import datetime, date
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -66,8 +66,17 @@ MOMENTUM_LOOKBACK = 126   # trading days (~6 months)
 MIN_HISTORY = 126
 TOP_K = 5                 # number of ETFs to hold at a time
 
-# Rebalance threshold: submit orders if any weight diff exceeds this
-REBALANCE_WEIGHT_THRESHOLD = 0.02   # 2% drift triggers rebalance
+# Default rebalance config (used as a fallback if execution.yaml is missing
+# or doesn't contain a ``rebalance:`` block). Real values are sourced from
+# config/execution.yaml so they can be tuned without code changes — see the
+# `rebalance:` section in that file for documented thresholds.
+DEFAULT_REBALANCE_CONFIG: dict[str, Any] = {
+    "cadence": "monthly",                                  # monthly | drift
+    "drift_threshold": 0.05,                               # 5% per-name band
+    "composition_threshold": 0.05,                         # materiality cutoff
+    "cooldown_days": 3,                                    # global cooldown
+    "state_path": "data/broker/state/last_rebalance.json",
+}
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -82,6 +91,30 @@ def _is_month_end_week() -> bool:
     import calendar
     last_day = calendar.monthrange(d.year, d.month)[1]
     return d.day >= last_day - 4
+
+
+def _load_rebalance_config() -> dict[str, Any]:
+    """Load the rebalance section from config/execution.yaml.
+
+    Falls back to ``DEFAULT_REBALANCE_CONFIG`` for any missing keys so
+    that an incomplete config never silently disables a safety knob.
+    """
+    cfg = dict(DEFAULT_REBALANCE_CONFIG)
+    path = PROJECT_ROOT / "config" / "execution.yaml"
+    if not path.exists():
+        log.info("No execution.yaml found → using default rebalance config.")
+        return cfg
+    try:
+        import yaml  # type: ignore[import-not-found]
+        with open(path) as f:
+            doc = yaml.safe_load(f) or {}
+        rb = (doc.get("execution") or {}).get("rebalance") or {}
+        for k, default_v in DEFAULT_REBALANCE_CONFIG.items():
+            if k in rb and rb[k] is not None:
+                cfg[k] = rb[k]
+    except Exception as exc:
+        log.warning("Could not parse execution.yaml rebalance block: %s", exc)
+    return cfg
 
 
 def _load_latest_targets() -> "pd.DataFrame | None":
@@ -108,15 +141,103 @@ def _latest_rebalance_date(targets_df: "pd.DataFrame") -> date | None:
         return None
 
 
-def _needs_rebalance(targets_df: "pd.DataFrame | None", force: bool = False) -> bool:
-    """
-    Decide if we should submit orders today.
+def _load_reconciliation(profile: str) -> "pd.DataFrame | None":
+    """Load the latest reconciliation (target + current per symbol).
 
-    Rules (any one triggers rebalance):
-      - force=True flag
-      - No targets file at all → definitely need to set up
-      - Latest rebalance date was in the current month → positions may be stale
-      - Latest rebalance date was in a prior month → missed a rebalance
+    The reconciliation file is rebuilt on every run by the basket-build
+    step and contains everything we need to compute drift: ``symbol``,
+    ``target_weight``, ``current_shares``, and ``close``.
+    """
+    try:
+        import pandas as pd
+        base = PROJECT_ROOT / "data" / "broker" / "reconciliations"
+        path = base / f"{profile}_reconciliation.parquet"
+        if not path.exists():
+            path = path.with_suffix(".csv")
+        if not path.exists():
+            return None
+        return pd.read_parquet(path) if path.suffix == ".parquet" else pd.read_csv(path)
+    except Exception as exc:
+        log.warning("Could not load reconciliation for %s: %s", profile, exc)
+        return None
+
+
+def _weights_from_reconciliation(
+    recon_df: "pd.DataFrame",
+) -> tuple[dict[str, float], dict[str, float]]:
+    """Return ``(target_weights, current_weights)`` from a reconciliation.
+
+    NAV is inferred from ``target_dollars / target_weight`` (their ratio
+    is the implied total NAV, ignoring the cash buffer). Current weights
+    are then ``current_shares * close / nav``. Robust to the small float
+    noise from the cash buffer because we use the median ratio.
+    """
+    target_weights = {
+        str(row["symbol"]): float(row["target_weight"])
+        for _, row in recon_df.iterrows()
+        if float(row.get("target_weight", 0.0)) > 0
+    }
+
+    nav: float = 0.0
+    try:
+        ratios = (
+            recon_df.loc[recon_df["target_weight"] > 0, "target_dollars"]
+            / recon_df.loc[recon_df["target_weight"] > 0, "target_weight"]
+        )
+        nav = float(ratios.median())
+    except Exception:
+        nav = 0.0
+
+    current_weights: dict[str, float] = {}
+    if nav > 0:
+        for _, row in recon_df.iterrows():
+            sym = str(row["symbol"])
+            shares = float(row.get("current_shares", 0.0) or 0.0)
+            close = float(row.get("close", 0.0) or 0.0)
+            if shares != 0 and close > 0:
+                current_weights[sym] = (shares * close) / nav
+
+    return target_weights, current_weights
+
+
+def _load_last_rebalance_state(state_path: Path) -> dict[str, Any] | None:
+    if not state_path.exists():
+        return None
+    try:
+        with open(state_path) as f:
+            return json.load(f)
+    except Exception as exc:
+        log.warning("Could not read last_rebalance state at %s: %s", state_path, exc)
+        return None
+
+
+def _save_last_rebalance_state(
+    state_path: Path,
+    *,
+    submitted_at: date,
+    target_weights: dict[str, float],
+) -> None:
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "submitted_at": submitted_at.isoformat(),
+        "basket": target_weights,
+    }
+    tmp = state_path.with_suffix(state_path.suffix + ".tmp")
+    with open(tmp, "w") as f:
+        json.dump(payload, f, indent=2, sort_keys=True)
+    os.replace(tmp, state_path)
+    log.info("Saved last_rebalance state → %s", state_path)
+
+
+def _needs_rebalance_monthly(
+    targets_df: "pd.DataFrame | None", force: bool = False
+) -> bool:
+    """Legacy monthly cadence: rebalance when the calendar month rolls over.
+
+    This is the original gate. It fires only when (a) there's no targets
+    file, (b) the latest signal is from a strictly earlier month, or
+    (c) ``force=True``. Kept as a fallback / paper-safety mode behind
+    ``cadence: monthly`` in ``execution.yaml``.
     """
     if force:
         log.info("Force-rebalance flag set → will submit orders.")
@@ -132,16 +253,122 @@ def _needs_rebalance(targets_df: "pd.DataFrame | None", force: bool = False) -> 
     if latest is None:
         return True
 
-    # If the latest signal date is from a past month, we need fresh targets
-    if latest.year < today.year or latest.month < today.month:
+    # Tuple comparison handles the year-rollover edge case correctly
+    # (e.g. latest=2025-12, today=2026-01) without the AND/OR mistake
+    # the original line had.
+    if (latest.year, latest.month) < (today.year, today.month):
         log.info(
             "Latest rebalance date %s is before current month (%s-%02d) → will rebalance.",
             latest, today.year, today.month,
         )
         return True
 
-    log.info("Latest rebalance date %s is current month → skipping order submission today.", latest)
+    if latest > today:
+        # Future signal date → clock skew or replay; don't silently skip.
+        log.warning(
+            "Latest rebalance date %s is AFTER today %s — clock anomaly, "
+            "forcing rebalance to refresh.", latest, today,
+        )
+        return True
+
+    log.info(
+        "Latest rebalance date %s is current month → skipping order submission today.",
+        latest,
+    )
     return False
+
+
+def _needs_rebalance_drift(
+    profile: str,
+    rb_cfg: dict[str, Any],
+    force: bool = False,
+) -> tuple[bool, dict[str, Any]]:
+    """Drift-band cadence: daily check, fire on composition or drift.
+
+    Returns ``(should_rebalance, diagnostics)`` where ``diagnostics`` is
+    a JSON-safe dict suitable for the run log.
+    """
+    from src.runtime.auto_rebalance import decide_rebalance_with_drift
+
+    recon = _load_reconciliation(profile)
+    if recon is None or recon.empty:
+        log.info("No reconciliation found → will rebalance (cold start).")
+        return True, {"reason": "no reconciliation file", "cold_start": True}
+
+    target_weights, current_weights = _weights_from_reconciliation(recon)
+
+    state_path = PROJECT_ROOT / rb_cfg["state_path"]
+    state = _load_last_rebalance_state(state_path)
+
+    last_basket: Optional[dict[str, float]] = None
+    last_submitted_at: Optional[date] = None
+    if state:
+        try:
+            last_basket = {str(k): float(v) for k, v in (state.get("basket") or {}).items()}
+            if state.get("submitted_at"):
+                last_submitted_at = date.fromisoformat(str(state["submitted_at"]))
+        except Exception as exc:
+            log.warning("Could not parse last_rebalance state: %s", exc)
+
+    decision = decide_rebalance_with_drift(
+        target_weights=target_weights,
+        current_weights=current_weights,
+        today=_today(),
+        last_submitted_at=last_submitted_at,
+        last_basket=last_basket,
+        drift_threshold=float(rb_cfg["drift_threshold"]),
+        composition_threshold=float(rb_cfg["composition_threshold"]),
+        cooldown_days=int(rb_cfg["cooldown_days"]),
+        force=force,
+    )
+
+    log.info(
+        "Drift gate: rebalance=%s · max_drift=%.4f · composition_changed=%s · "
+        "in_cooldown=%s · reason=%s",
+        decision.rebalance,
+        decision.max_drift,
+        decision.composition_changed,
+        decision.in_cooldown,
+        decision.reason,
+    )
+
+    diagnostics = {
+        "cadence": "drift",
+        "rebalance": decision.rebalance,
+        "reason": decision.reason,
+        "max_drift": decision.max_drift,
+        "composition_changed": decision.composition_changed,
+        "in_cooldown": decision.in_cooldown,
+        "cooldown_remaining_days": decision.cooldown_remaining_days,
+        "drift_per_symbol": dict(decision.drift_per_symbol),
+        "thresholds": {
+            "drift": rb_cfg["drift_threshold"],
+            "composition": rb_cfg["composition_threshold"],
+            "cooldown_days": rb_cfg["cooldown_days"],
+        },
+    }
+    return decision.rebalance, diagnostics
+
+
+def _needs_rebalance(
+    targets_df: "pd.DataFrame | None",
+    profile: str,
+    rb_cfg: dict[str, Any],
+    force: bool = False,
+) -> tuple[bool, dict[str, Any]]:
+    """Cadence dispatcher.
+
+    Returns ``(should_rebalance, diagnostics)``. The diagnostics dict is
+    persisted in the run log so post-mortems can answer "why didn't the
+    runner trade today?" without re-running anything.
+    """
+    cadence = str(rb_cfg.get("cadence", "monthly")).lower()
+    if cadence == "drift":
+        return _needs_rebalance_drift(profile=profile, rb_cfg=rb_cfg, force=force)
+    if cadence != "monthly":
+        log.warning("Unknown cadence %r in execution.yaml → falling back to monthly.", cadence)
+    decided = _needs_rebalance_monthly(targets_df, force=force)
+    return decided, {"cadence": "monthly", "rebalance": decided}
 
 
 def _write_run_log(run_id: str, result: dict[str, Any]) -> Path:
@@ -152,6 +379,30 @@ def _write_run_log(run_id: str, result: dict[str, Any]) -> Path:
         json.dump(result, f, indent=2, default=str)
     log.info("Run log saved: %s", out)
     return out
+
+
+def _already_ran_today_successfully() -> Optional[Path]:
+    """Return the path of today's successful run log, if one exists.
+
+    Used by the catch-up flag (``--skip-if-ran-today``) to make the
+    LaunchAgent's RunAtLoad fire idempotent: log in any time after a
+    successful 16:32 run and the runner exits without doing anything,
+    but log in after a *missed* 16:32 (Mac was off, asleep, or you'd
+    user-switched away too long) and it executes the catch-up.
+    """
+    run_dir = PROJECT_ROOT / "artifacts" / "runs"
+    if not run_dir.exists():
+        return None
+    today_prefix = f"daily_run_{_today().strftime('%Y%m%d')}_"
+    for path in sorted(run_dir.glob(f"{today_prefix}*.json"), reverse=True):
+        try:
+            with open(path) as f:
+                doc = json.load(f)
+            if doc.get("ok") is True:
+                return path
+        except Exception:
+            continue
+    return None
 
 
 # ── Step functions ────────────────────────────────────────────────────────────
@@ -415,9 +666,20 @@ def run(
         return run_result
 
     # ── Rebalance decision ────────────────────────────────────────────────────
+    rb_cfg = _load_rebalance_config()
+    log.info(
+        "Rebalance cadence: %s (drift_threshold=%.3f · composition_threshold=%.3f · cooldown=%sd)",
+        rb_cfg["cadence"],
+        float(rb_cfg["drift_threshold"]),
+        float(rb_cfg["composition_threshold"]),
+        rb_cfg["cooldown_days"],
+    )
     targets_df = _load_latest_targets()
-    should_rebalance = _needs_rebalance(targets_df, force=force_rebalance)
+    should_rebalance, rebalance_diag = _needs_rebalance(
+        targets_df, profile=profile, rb_cfg=rb_cfg, force=force_rebalance,
+    )
     run_result["should_rebalance"] = should_rebalance
+    run_result["rebalance_decision"] = rebalance_diag
 
     if not should_rebalance:
         log.info("No rebalance needed today. Done.")
@@ -448,6 +710,32 @@ def run(
 
     overall_ok = submit_result.get("ok", False)
     run_result["ok"] = overall_ok
+
+    # ── Persist last-rebalance state so the next drift gate can read it.
+    # Only do this on a real submission (no dry-run, no risk-blocked path,
+    # and only when the drift cadence is in use). The state file is what
+    # cooldown + composition checks compare against.
+    submission_actually_happened = (
+        overall_ok
+        and not dry_run
+        and not submit_result.get("skipped")
+        and not submit_result.get("blocked")
+        and submit_result.get("submitted")
+    )
+    if submission_actually_happened and rb_cfg.get("cadence") == "drift":
+        try:
+            recon = _load_reconciliation(profile)
+            if recon is not None and not recon.empty:
+                target_weights, _ = _weights_from_reconciliation(recon)
+                _save_last_rebalance_state(
+                    PROJECT_ROOT / rb_cfg["state_path"],
+                    submitted_at=_today(),
+                    target_weights=target_weights,
+                )
+        except Exception as exc:
+            # State write is best-effort — a failure here is not worth
+            # failing the whole run for.
+            log.warning("Could not persist last_rebalance state: %s", exc)
 
     log.info("=" * 60)
     log.info("DAILY RUNNER COMPLETE — %s", "✓ OK" if overall_ok else "✗ FAILED")
@@ -480,8 +768,33 @@ def main() -> None:
                         help="Submit orders even if no new rebalance date detected")
     parser.add_argument("--skip-append", action="store_true", dest="skip_append",
                         help="Skip IBKR data append (use existing data)")
+    parser.add_argument(
+        "--skip-if-ran-today", action="store_true", dest="skip_if_ran_today",
+        help=(
+            "Idempotency guard for the LaunchAgent's RunAtLoad fire: exit "
+            "immediately if today is a weekend, or if today's run log already "
+            "exists with ok=True. Designed for catch-up on login when the "
+            "scheduled fire was missed (Mac off / asleep)."
+        ),
+    )
     parser.add_argument("--json-out", action="store_true", help="Print result JSON to stdout")
     args = parser.parse_args()
+
+    # ── Catch-up guard ─────────────────────────────────────────────────
+    # Run when EITHER:
+    #   • the scheduler fires us at 16:32 on a weekday, OR
+    #   • the user logs in and the scheduled fire was missed.
+    # Skip when the user logs in on a weekend, or already after today's
+    # run succeeded (so RunAtLoad is harmless on every subsequent login).
+    if args.skip_if_ran_today:
+        if _today().weekday() >= 5:
+            log.info("Catch-up: today is a weekend → skip.")
+            sys.exit(0)
+        prior = _already_ran_today_successfully()
+        if prior is not None:
+            log.info("Catch-up: today's run already succeeded (%s) → skip.", prior.name)
+            sys.exit(0)
+        log.info("Catch-up: no successful run for %s yet → executing now.", _today())
 
     # Resolve port: CLI > env > profile default.
     resolved_port = args.port

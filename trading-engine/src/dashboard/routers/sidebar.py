@@ -5,9 +5,20 @@ metadata, ETF refresh, and the Run-Audit button.
 from __future__ import annotations
 
 import socket
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+
+def _rotating_client_id(base: int, span: int) -> int:
+    """Return a clientId in [base, base+span) that rotates each second.
+
+    Avoids the IBKR Error 326 ("client id is already in use") collision when
+    a previous run's connection has not been fully released yet — every back-
+    to-back click lands on a different slot.
+    """
+    return base + (int(time.time()) % span)
 
 import pandas as pd
 from fastapi import APIRouter, HTTPException
@@ -122,12 +133,15 @@ def refresh_etf(profile: str | None = None) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Could not import append_ibkr_daily: {exc}") from exc
 
     port = _autodetect_ibkr_port(profile)
+    # Rotate clientId each second so rapid re-clicks don't collide on Error 326.
+    # 150–189 range keeps refresh-etf separate from run-audit's 200+ range.
+    client_id = _rotating_client_id(base=150, span=40)
     try:
         result = append_ibkr_daily(
             profile=profile,
             host="127.0.0.1",
             port=port,
-            client_id=199,
+            client_id=client_id,
             lookback="10 D",
         )
     except Exception as exc:  # noqa: BLE001
@@ -160,11 +174,15 @@ def run_audit(profile: str | None = None) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Could not import daily_runner: {exc}") from exc
 
     port = _autodetect_ibkr_port(profile)
+    # Rotate clientId each second so rapid re-clicks don't collide on Error 326.
+    # daily_runner uses client_id, client_id+10, client_id+20 internally, so
+    # the effective range is 200..289 — well above any default IBKR slot.
+    client_id = _rotating_client_id(base=200, span=50)
     try:
         result = daily_run(
             host="127.0.0.1",
             port=port,
-            client_id=201,
+            client_id=client_id,
             profile=profile,
             lookback="10 D",
             dry_run=True,

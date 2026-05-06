@@ -19,3 +19,24 @@ execution:
     reject_unknown_symbols: true
     require_fresh_account_snapshot: true
     require_fresh_positions_snapshot: true
+
+  rebalance:
+    # Rebalance cadence:
+    #   monthly — only rebalance when the calendar month rolls over
+    #             (legacy behaviour; matches the original
+    #             daily_runner._needs_rebalance gate)
+    #   drift   — daily check, fire when basket composition changes or
+    #             any name's |target − actual| weight drift exceeds
+    #             ``drift_threshold``, with a global cooldown to dampen
+    #             same-week churn
+    cadence: drift
+
+    # Used only when cadence: drift
+    drift_threshold: 0.05          # 5% per-name weight drift band
+    composition_threshold: 0.05    # weight cutoff for "materially held"
+                                   # — a name entering or leaving this set
+                                   #   forces a rebalance regardless of
+                                   #   drift_threshold
+    cooldown_days: 3               # min days between submissions; does
+                                   # not block cold starts or --force
+    state_path: data/broker/state/last_rebalance.json

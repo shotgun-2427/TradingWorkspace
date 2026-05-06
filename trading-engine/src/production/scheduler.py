@@ -83,6 +83,11 @@ def _build_plist() -> str:
                 <string>{PYTHON_PATH}</string>
                 <string>-m</string>
                 <string>{RUNNER_MODULE}</string>
+                <!-- ``--skip-if-ran-today`` makes the RunAtLoad fire below
+                     a no-op on every login that happens AFTER today's
+                     16:32 already succeeded, while still executing the
+                     catch-up when 16:32 was missed (Mac off / asleep). -->
+                <string>--skip-if-ran-today</string>
             </array>
 
             <key>WorkingDirectory</key>
@@ -122,9 +127,11 @@ def _build_plist() -> str:
                 </dict>
             </array>
 
-            <!-- Retry if Mac was asleep at scheduled time -->
+            <!-- Catch-up: fire whenever the agent loads (= every login).
+                 The runner's --skip-if-ran-today guard makes this a no-op
+                 unless the scheduled 16:32 fire was missed. -->
             <key>RunAtLoad</key>
-            <false/>
+            <true/>
 
             <key>StandardOutPath</key>
             <string>{stdout_log}</string>

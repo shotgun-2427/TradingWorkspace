@@ -163,7 +163,13 @@ def reconcile_end_of_day(
             error=str(exc),
         )
 
-    material = any(abs(d.get("notional_diff_usd", 0.0)) >= material_threshold_usd for d in diffs)
+    # Defensive: diffs must be a list of dicts. Drop garbage rows.
+    if not isinstance(diffs, list):
+        log.warning("EOD reconcile: reconciler returned non-list %r", type(diffs))
+        diffs = []
+    diffs = [d for d in diffs if isinstance(d, dict)]
+
+    material = any(abs(_safe_diff_notional(d)) >= material_threshold_usd for d in diffs)
 
     payload = {
         "profile": profile,
@@ -174,15 +180,49 @@ def reconcile_end_of_day(
         "diff_count": len(diffs),
         "diffs": diffs,
     }
-    report_path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+    try:
+        _atomic_write_json(report_path, payload)
+    except OSError as exc:
+        log.exception("EOD reconcile: failed to write report")
+        return EodReconcileResult(
+            ok=False,
+            profile=profile,
+            as_of=as_of.isoformat(),
+            diffs=diffs,
+            material_mismatch=material,
+            report_path=None,
+            error=f"report write failed: {exc}",
+        )
 
     if material and arm_switch_on_mismatch:
-        log.error("Material mismatch detected — arming kill switch.")
-        arm_kill_switch(
-            reason=f"EOD reconciliation mismatch on {as_of.isoformat()}; "
-                   f"see {report_path.name}",
-            by="end_of_day_reconcile",
-        )
+        # Idempotent — don't re-arm if already armed (avoids overwriting
+        # the original armed_at timestamp / reason on a re-run).
+        try:
+            already_armed = is_kill_switch_armed()
+        except KillSwitchCorrupted:
+            # Treat corruption as armed (per kill_switch contract).
+            already_armed = True
+        if not already_armed:
+            log.error("Material mismatch detected — arming kill switch.")
+            try:
+                arm_kill_switch(
+                    reason=f"EOD reconciliation mismatch on {as_of.isoformat()}; "
+                           f"see {report_path.name}",
+                    by="end_of_day_reconcile",
+                )
+            except Exception as exc:
+                log.exception("EOD reconcile: failed to arm kill switch")
+                return EodReconcileResult(
+                    ok=False,
+                    profile=profile,
+                    as_of=as_of.isoformat(),
+                    diffs=diffs,
+                    material_mismatch=material,
+                    report_path=str(report_path),
+                    error=f"arm failed: {exc}",
+                )
+        else:
+            log.info("Material mismatch on rerun — kill switch already armed.")
 
     return EodReconcileResult(
         ok=True,

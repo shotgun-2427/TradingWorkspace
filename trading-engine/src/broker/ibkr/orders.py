@@ -6,7 +6,7 @@ from typing import Any, Literal, Optional
 
 from ib_async import Contract, LimitOrder, MarketOrder, Order, Stock, StopOrder
 
-from .client import IBKRClient
+from .client import IBKRClient, IBKRConnectionConfig
 
 logger = logging.getLogger(__name__)
 
@@ -259,3 +259,113 @@ class IBKROrderManager:
             "filled_qty": filled_qty,
             "avg_fill_price": avg_fill_price,
         }
+
+
+# ── Module-level convenience for the order_router ─────────────────────────
+#
+# ``src.execution.order_router`` calls ``ibkr_orders.submit_one(ticket)``
+# with a single ``OrderTicket`` (symbol, signed qty, price, side). The
+# router persists the returned dict — so this function must:
+#   * always return a dict (never raise),
+#   * mark ok=False with an error string on any failure, and
+#   * include broker identifiers (order_id, perm_id, status) on success.
+def submit_one(
+    ticket: Any,
+    *,
+    profile: str = "paper",
+    manager: "IBKROrderManager | None" = None,
+    order_type: OrderType = "MKT",
+    wait_for_status: bool = True,
+    timeout: float = 30.0,
+) -> dict[str, Any]:
+    """Submit a single ``OrderTicket`` to IBKR.
+
+    Always returns a result dict. Designed to be called from
+    ``order_router.submit_orders``; never raises so the router's audit
+    log captures every failure mode.
+
+    Parameters
+    ----------
+    ticket : OrderTicket
+        Must expose ``symbol`` (str), ``qty`` (signed int), ``price``
+        (float). Sign of ``qty`` chooses BUY / SELL.
+    profile : "paper" or "live"
+    manager : optional injected ``IBKROrderManager`` (tests use this
+              to avoid the network).
+    order_type : "MKT" / "LMT" / "STP" / "MOC"
+    """
+    sym: str | None = None
+    try:
+        sym = str(getattr(ticket, "symbol")).strip().upper()
+        qty_signed = int(getattr(ticket, "qty"))
+        if not sym:
+            return {"ok": False, "error": "missing symbol", "symbol": sym}
+        if qty_signed == 0:
+            return {"ok": False, "error": "zero quantity", "symbol": sym}
+
+        action: OrderAction = "BUY" if qty_signed > 0 else "SELL"
+        request = OrderRequest(
+            symbol=sym,
+            action=action,
+            quantity=float(abs(qty_signed)),
+            order_type=order_type if order_type in {"MKT", "LMT", "STP", "MOC"} else "MKT",
+            limit_price=float(getattr(ticket, "price")) if order_type == "LMT" else None,
+            order_ref=f"{profile}-router-{sym}-{abs(qty_signed)}",
+        )
+    except Exception as exc:  # noqa: BLE001 — bad ticket → audit row, not crash
+        return {"ok": False, "error": f"ticket build failed: {exc}", "symbol": sym}
+
+    owns_manager = manager is None
+    if manager is None:
+        # Lazy import — avoids a circular if executions.py is loaded later.
+        from .executions import _broker_profile_config
+
+        cfg = _broker_profile_config(profile)
+        try:
+            client = IBKRClient(IBKRConnectionConfig(
+                host=cfg["host"],
+                port=cfg["port"],
+                client_id=int(cfg["client_id"]),
+                readonly=False,
+                account=cfg["account"],
+            ))
+            client.connect()
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": f"connect failed: {exc}", "symbol": sym}
+        manager = IBKROrderManager(client)
+
+    try:
+        trade = manager.place_order(
+            request,
+            wait_for_status=wait_for_status,
+            timeout=timeout,
+        )
+        summary = IBKROrderManager.summarize_trade(trade)
+        return {
+            "ok": True,
+            "symbol": sym,
+            "action": action,
+            "qty": int(abs(qty_signed)),
+            "order_id": summary.get("order_id"),
+            "perm_id": summary.get("perm_id"),
+            "status": summary.get("status"),
+            "filled_qty": summary.get("filled_qty"),
+            "avg_fill_price": summary.get("avg_fill_price"),
+        }
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("submit_one: place failed for %s", sym)
+        return {"ok": False, "error": str(exc), "symbol": sym}
+    finally:
+        if owns_manager:
+            try:
+                manager.client.disconnect()
+            except Exception:  # noqa: BLE001
+                pass
+
+
+__all__ = [
+    "OrderRequest",
+    "IBKROrderError",
+    "IBKROrderManager",
+    "submit_one",
+]

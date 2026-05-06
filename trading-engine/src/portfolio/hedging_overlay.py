@@ -18,12 +18,27 @@ from dataclasses import dataclass
 from typing import Dict, Mapping
 
 
+import math
+
+
 @dataclass(frozen=True, slots=True)
 class HedgeOverlayConfig:
     enabled: bool = False
     hedge_symbol: str = "TLT-US"
     hedge_weight: float = 0.10            # 10% of gross
     trigger_signal_threshold: float = -0.5  # e.g. mean news sentiment < -0.5
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.hedge_symbol, str) or not self.hedge_symbol:
+            raise ValueError(f"hedge_symbol must be a non-empty string, got {self.hedge_symbol!r}")
+        if not (math.isfinite(self.hedge_weight) and 0 < self.hedge_weight <= 5.0):
+            raise ValueError(
+                f"hedge_weight must be in (0, 5], got {self.hedge_weight!r}"
+            )
+        if not math.isfinite(self.trigger_signal_threshold):
+            raise ValueError(
+                f"trigger_signal_threshold must be finite, got {self.trigger_signal_threshold!r}"
+            )
 
 
 def apply_overlay(
@@ -40,11 +55,30 @@ def apply_overlay(
     is to return ``dict(target_weights)`` unchanged.
     """
     cfg = config or HedgeOverlayConfig()
-    out: Dict[str, float] = dict(target_weights)
+    # Filter out non-finite / non-numeric weights from the input — caller
+    # mistakes shouldn't propagate into the trade book.
+    out: Dict[str, float] = {}
+    for s, w in target_weights.items():
+        if not isinstance(s, str) or not s:
+            continue
+        try:
+            f = float(w)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(f):
+            out[s] = f
 
     if not cfg.enabled:
         return out
-    if macro_signal is None or macro_signal >= cfg.trigger_signal_threshold:
+    if macro_signal is None:
+        return out
+    try:
+        sig = float(macro_signal)
+    except (TypeError, ValueError):
+        return out
+    if not math.isfinite(sig):
+        return out
+    if sig >= cfg.trigger_signal_threshold:
         return out
 
     # Trigger met. Add or top-up the hedge position.

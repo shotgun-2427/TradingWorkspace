@@ -68,6 +68,7 @@ def validate_weight_frame(
     *,
     allow_short: bool = True,
     weight_bound: float = 5.0,
+    require_nonempty: bool = False,
 ) -> None:
     """Sanity-check a model's weight frame.
 
@@ -77,19 +78,44 @@ def validate_weight_frame(
 
     Checks:
       * has a ``date`` column
+      * no duplicate column names
       * has every ticker as a Float64 column
       * no NaN / non-finite weights
       * weights inside ``[-weight_bound, weight_bound]`` (or
         ``[0, weight_bound]`` if ``allow_short=False``)
+      * (optional) frame is non-empty (``require_nonempty=True``)
     """
+    if not (isinstance(weight_bound, (int, float)) and weight_bound > 0):
+        raise ValueError(f"weight_bound must be > 0, got {weight_bound!r}")
+    if not isinstance(expected_tickers, (list, tuple)):
+        raise TypeError(
+            f"expected_tickers must be list/tuple, got {type(expected_tickers).__name__}"
+        )
+
     df = weights.collect() if isinstance(weights, LazyFrame) else weights
-    cols = set(df.columns)
+    cols_list = list(df.columns)
+    cols = set(cols_list)
+
+    # Duplicate column detection (Polars allows them by default).
+    if len(cols_list) != len(cols):
+        seen: set[str] = set()
+        dups = []
+        for c in cols_list:
+            if c in seen:
+                dups.append(c)
+            seen.add(c)
+        raise ValueError(f"weights frame has duplicate columns: {dups}")
 
     missing = REQUIRED_OUTPUT_COLUMNS - cols
     if missing:
         raise ValueError(f"weights frame missing required columns: {sorted(missing)}")
 
+    if require_nonempty and df.height == 0:
+        raise ValueError("weights frame is empty but require_nonempty=True")
+
     for t in expected_tickers:
+        if not isinstance(t, str) or not t:
+            raise ValueError(f"expected ticker must be non-empty string, got {t!r}")
         if t not in cols:
             raise ValueError(f"weights frame missing ticker column: {t!r}")
         col = df.get_column(t)
@@ -97,14 +123,16 @@ def validate_weight_frame(
             raise ValueError(
                 f"ticker column {t!r} has dtype {col.dtype}, expected Float64"
             )
-        # NaN / infinite check — use polars' is_finite
         n_total = col.len()
-        n_finite = col.is_finite().sum()
+        if n_total == 0:
+            # Empty column — nothing to check; bounds inapplicable.
+            continue
+        n_finite = int(col.is_finite().sum() or 0)
         if n_finite != n_total:
             raise ValueError(
-                f"ticker column {t!r} has {n_total - n_finite} non-finite values"
+                f"ticker column {t!r} has {n_total - n_finite} non-finite values "
+                f"(NaN, +inf, -inf, or null)"
             )
-        # Bound check
         lo = -weight_bound if allow_short else 0.0
         hi = weight_bound
         col_min = col.min()
