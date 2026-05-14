@@ -1,0 +1,9 @@
+indices:
+  enabled: false
+
+  # Reference indices with historical price data loaded into
+  # data/market/cleaned/prices/indices_prices_master.csv. Tracked for research
+  # and risk context only — NOT tradable directly.
+  tracked:
+    - VIX   # CBOE Volatility Index
+    - DXY   # ICE US Dollar Index (Barchart symbol: DXY.Z)

@@ -1,6 +1,23 @@
 futures:
   enabled: false
 
+  # Continuous front-month futures with historical price data loaded into
+  # data/market/cleaned/prices/futures_prices_master.csv. Tracked for research
+  # and risk context only — NOT in the trading universe yet.
+  tracked:
+    - BRN   # ICE Brent crude (continuous)
+    - ZC    # CBOT corn
+    - ZW    # CBOT wheat
+    - ZS    # CBOT soybeans
+    - ZO    # CBOT oats
+    - QG    # NYMEX e-mini natural gas
+    - QO    # COMEX e-mini gold
+    - QI    # COMEX e-mini silver
+    - QC    # COMEX e-mini copper
+    - RTY   # CME e-mini Russell 2000
+    # QM (e-mini crude) deliberately excluded — Barchart export for QM was
+    # mislabeled and contained duplicate QG data; re-download required.
+
   hedge_candidates:
     - ES
     - NQ
