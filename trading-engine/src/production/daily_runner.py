@@ -438,6 +438,68 @@ def step_append_daily(
     return result
 
 
+def step_append_indices_daily(
+    host: str,
+    port: int,
+    client_id: int,
+    profile: str,
+    lookback: str = "5 D",
+) -> dict[str, Any]:
+    """Refresh indices_prices_master from IBKR. Fail-soft: errors logged, never aborts."""
+    log.info("── Step 1b: Append IBKR indices (VIX, DXY) ─────────────────")
+    try:
+        from src.production.pipeline.append_indices_daily import append_indices_daily
+        result = append_indices_daily(
+            profile=profile, host=host, port=port, client_id=client_id, lookback=lookback,
+        )
+    except Exception as exc:  # noqa: BLE001 — fail-soft is intentional
+        log.warning("Indices append raised — continuing pipeline. %s: %s", type(exc).__name__, exc)
+        return {"ok": False, "action": "append_indices_daily", "error": str(exc), "fail_soft": True}
+
+    if result.get("ok"):
+        log.info(
+            "✓ Indices: %s new rows · %s symbols · latest %s · errors=%s",
+            result.get("new_rows_added_to_master", 0),
+            result.get("symbols_with_data", 0),
+            result.get("latest_date"),
+            len(result.get("errors") or []),
+        )
+    else:
+        log.warning("✗ Indices append failed (fail-soft): %s", result.get("error"))
+    return result
+
+
+def step_append_futures_daily(
+    host: str,
+    port: int,
+    client_id: int,
+    profile: str,
+    lookback: str = "5 D",
+) -> dict[str, Any]:
+    """Refresh futures_prices_master from IBKR. Fail-soft: errors logged, never aborts."""
+    log.info("── Step 1c: Append IBKR continuous futures ─────────────────")
+    try:
+        from src.production.pipeline.append_futures_daily import append_futures_daily
+        result = append_futures_daily(
+            profile=profile, host=host, port=port, client_id=client_id, lookback=lookback,
+        )
+    except Exception as exc:  # noqa: BLE001 — fail-soft is intentional
+        log.warning("Futures append raised — continuing pipeline. %s: %s", type(exc).__name__, exc)
+        return {"ok": False, "action": "append_futures_daily", "error": str(exc), "fail_soft": True}
+
+    if result.get("ok"):
+        log.info(
+            "✓ Futures: %s new rows · %s symbols · latest %s · errors=%s",
+            result.get("new_rows_added_to_master", 0),
+            result.get("symbols_with_data", 0),
+            result.get("latest_date"),
+            len(result.get("errors") or []),
+        )
+    else:
+        log.warning("✗ Futures append failed (fail-soft): %s", result.get("error"))
+    return result
+
+
 def step_generate_targets(profile: str) -> dict[str, Any]:
     log.info("── Step 2: Generate targets ─────────────────────────────────")
     from src.production.generate_targets import generate_targets
@@ -650,9 +712,23 @@ def run(
             run_result["error"] = "append_daily failed"
             _write_run_log(run_id, run_result)
             return run_result
+
+        # Step 1b/1c — fail-soft refreshes of tracked-but-untraded series
+        # (indices, continuous futures). Errors here never block the ETF
+        # trading pipeline; we just record them in the run log.
+        run_result["steps"]["append_indices_daily"] = step_append_indices_daily(
+            host=host, port=port, client_id=client_id + 2,
+            profile=profile, lookback=lookback,
+        )
+        run_result["steps"]["append_futures_daily"] = step_append_futures_daily(
+            host=host, port=port, client_id=client_id + 4,
+            profile=profile, lookback=lookback,
+        )
     else:
         log.info("Skipping append (--skip-append flag).")
         run_result["steps"]["append_daily"] = {"skipped": True}
+        run_result["steps"]["append_indices_daily"] = {"skipped": True}
+        run_result["steps"]["append_futures_daily"] = {"skipped": True}
 
     # ── Step 2: Generate targets ──────────────────────────────────────────────
     targets_result = step_generate_targets(profile=profile)

@@ -1,14 +1,18 @@
 """
 model.py - Model Analysis routes.
 
-Two views:
-  - GET  /model/models     -> aggregate / per-model backtest equity curves
-  - GET  /model/prices     -> indexed-to-100 ETF price history
-  - GET  /model/meta       -> available models + last audit dates
+Views:
+  - GET  /model/models             -> aggregate / per-model backtest equity curves
+  - GET  /model/prices             -> indexed-to-100 ETF price history
+  - GET  /model/meta               -> available models + last audit dates
+  - GET  /model/per-etf-backtest   -> single-ticker single-model backtest curve
+                                      (produced by src/research/per_etf_backtest.py)
 """
 from __future__ import annotations
 
+import json
 from datetime import date, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -53,7 +57,190 @@ def meta(profile: str | None = None) -> dict[str, Any]:
         "active_optimizer": get_active_optimizer(profile),
         "latest_production_audit": _iso(get_latest_production_audit(profile)),
         "latest_simulations_audit": _iso(get_latest_simulations_audit(profile)),
+        "etf_universe": _etf_universe(),
     }
+
+
+def _etf_universe() -> list[str]:
+    """Sorted list of symbols in the ETF master file."""
+    try:
+        prices = load_latest_prices()
+    except Exception:  # noqa: BLE001
+        return []
+    if prices is None or prices.empty or "symbol" not in prices.columns:
+        return []
+    return sorted(prices["symbol"].astype(str).str.upper().unique().tolist())
+
+
+# ── Per-ETF backtest artifacts ──────────────────────────────────────────────
+#
+# Produced by `python -m src.research.per_etf_backtest --all`. The Backtester's
+# Engine-backtests tab cascading "pick ETF → pick model" flow reads these so
+# users see real model curves instead of the indexed-price fallback.
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
+_PER_ETF_ROOT = _PROJECT_ROOT / "data" / "research" / "per_etf"
+
+
+@router.get("/per-etf-backtest")
+def per_etf_backtest(
+    ticker: str,
+    model: str,
+    include_buy_hold: bool = True,
+) -> dict[str, Any]:
+    """Return a single (ticker, model) equity curve + summary metrics.
+
+    ``available=False`` means the artifact hasn't been produced yet — the
+    frontend should fall back to the indexed-price view.
+
+    When ``include_buy_hold`` is true (default), the response also includes
+    a ``buy_hold_points`` series for the same ticker over the same window,
+    and ``buy_hold_summary`` with reference performance. This is the
+    benchmark every other model should be measured against — without it the
+    UI can't tell whether a curve is "good" or just "long". The B&H curve
+    is aligned to the model's start date so the two curves are directly
+    comparable.
+    """
+    sym = ticker.strip().upper().replace("-US", "")
+    model_id = model.strip().lower()
+    if not sym or not model_id:
+        return {"available": False, "message": "ticker and model are required"}
+
+    parquet = _PER_ETF_ROOT / sym / f"{model_id}.parquet"
+    if not parquet.exists():
+        return {
+            "available": False,
+            "ticker": sym,
+            "model": model_id,
+            "message": (
+                f"No per-ETF artifact for ({sym}, {model_id}). Run "
+                f"`python -m src.research.per_etf_backtest` to produce it."
+            ),
+        }
+
+    try:
+        df = pd.read_parquet(parquet)
+    except Exception as exc:  # noqa: BLE001
+        return {"available": False, "error": str(exc)}
+
+    df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
+
+    # Trim leading burn-in (consecutive equity=1.0 rows with weight=0) so the
+    # chart starts when the strategy actually had a position. Cheap trim:
+    # find the first row with non-zero weight, drop everything before it.
+    first_active = (df["weight"].astype(float) != 0).idxmax() if (df["weight"] != 0).any() else 0
+    if first_active > 0:
+        df = df.iloc[first_active:].reset_index(drop=True)
+
+    # Summary block from the sibling summary.json (with a graceful fallback).
+    summary_path = _PER_ETF_ROOT / sym / "summary.json"
+    summary: dict[str, Any] = {}
+    all_summaries: dict[str, Any] = {}
+    if summary_path.exists():
+        try:
+            all_summaries = json.loads(summary_path.read_text())
+            summary = all_summaries.get(model_id, {})
+        except Exception:  # noqa: BLE001
+            all_summaries = {}
+            summary = {}
+
+    equity_points = [
+        {"date": d, "value": float(v)}
+        for d, v in zip(df["date"], df["equity"])
+        if np.isfinite(v)
+    ]
+    dd_points = [
+        {"date": d, "value": float(v)}
+        for d, v in zip(df["date"], df["drawdown"])
+        if np.isfinite(v)
+    ]
+    weight_points = [
+        {"date": d, "value": float(v)}
+        for d, v in zip(df["date"], df["weight"])
+        if np.isfinite(v)
+    ]
+
+    payload: dict[str, Any] = {
+        "available": True,
+        "ticker": sym,
+        "model": model_id,
+        "summary": summary,
+        "series": [{"name": f"{sym} · {model_id}", "kind": "per_etf", "points": equity_points}],
+        "drawdown_points": dd_points,
+        "weight_points": weight_points,
+        "range": {
+            "start": equity_points[0]["date"] if equity_points else None,
+            "end": equity_points[-1]["date"] if equity_points else None,
+        },
+    }
+
+    # Buy-and-hold benchmark — read from the sibling buy_and_hold artifact
+    # when it exists, otherwise compute from the indexed price series.
+    # We align it to the model's start date so the two curves start at 1.0.
+    if include_buy_hold and equity_points and model_id != "buy_and_hold":
+        bh_points, bh_summary = _buy_hold_overlay(sym, equity_points[0]["date"], equity_points[-1]["date"])
+        if bh_points:
+            payload["buy_hold_points"] = bh_points
+            payload["buy_hold_summary"] = bh_summary or all_summaries.get("buy_and_hold", {})
+
+    return payload
+
+
+def _buy_hold_overlay(
+    ticker: str, start_date: str, end_date: str
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Build a buy-and-hold equity curve aligned to the model's window.
+
+    Prefers the precomputed ``buy_and_hold.parquet`` artifact if present
+    (re-indexed so the curve starts at 1.0 on ``start_date``). Otherwise
+    falls back to the master price file. Returns ``([], {})`` when neither
+    is available — the frontend should then skip the overlay.
+    """
+    parquet = _PER_ETF_ROOT / ticker / "buy_and_hold.parquet"
+    if parquet.exists():
+        try:
+            df = pd.read_parquet(parquet)
+        except Exception:  # noqa: BLE001
+            df = None
+        if df is not None and not df.empty:
+            df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
+            mask = (df["date"] >= start_date) & (df["date"] <= end_date)
+            sub = df.loc[mask].reset_index(drop=True)
+            if not sub.empty:
+                base = float(sub["equity"].iloc[0])
+                if base > 0:
+                    points = [
+                        {"date": d, "value": float(v) / base}
+                        for d, v in zip(sub["date"], sub["equity"])
+                        if np.isfinite(v)
+                    ]
+                    return points, {}
+    # Fallback: compute from the master prices.
+    try:
+        prices = load_latest_prices()
+    except Exception:  # noqa: BLE001
+        prices = None
+    if prices is None or prices.empty:
+        return [], {}
+    prices = prices.copy()
+    prices["date"] = pd.to_datetime(prices["date"])
+    prices["symbol"] = prices["symbol"].astype(str).str.upper()
+    sub = prices[
+        (prices["symbol"] == ticker)
+        & (prices["date"] >= pd.Timestamp(start_date))
+        & (prices["date"] <= pd.Timestamp(end_date))
+    ].sort_values("date")
+    if sub.empty:
+        return [], {}
+    base = float(sub["close"].iloc[0])
+    if base <= 0:
+        return [], {}
+    points = [
+        {"date": d.strftime("%Y-%m-%d"), "value": float(c) / base}
+        for d, c in zip(sub["date"], sub["close"])
+        if np.isfinite(c)
+    ]
+    return points, {}
 
 
 @router.get("/models")

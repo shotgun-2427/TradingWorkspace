@@ -1,0 +1,10 @@
+rates:
+  enabled: false
+
+  # Reference rates with historical yield data loaded into
+  # data/market/cleaned/prices/rates_master.csv. Tracked for research and risk
+  # context only — NOT tradable directly. SOFR cannot be fetched via the IBKR
+  # Stock/Index/Future API since the underlying is a published fixing, not an
+  # instrument. Append code is left as a stub.
+  tracked:
+    - SOFR  # US Secured Overnight Financing Rate (Barchart symbol: USSOFR-FDS)
